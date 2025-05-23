@@ -5,6 +5,11 @@
 
 using namespace Rcpp;
 
+#ifdef RCPP_USE_GLOBAL_ROSTREAM
+Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
+Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
+#endif
+
 // fetch
 RawVector fetch(CharacterVector server, CharacterVector method, RawVector requestArg, CharacterVector metadata);
 RcppExport SEXP _grpc_fetch(SEXP serverSEXP, SEXP methodSEXP, SEXP requestArgSEXP, SEXP metadataSEXP) {
@@ -19,26 +24,54 @@ BEGIN_RCPP
     return rcpp_result_gen;
 END_RCPP
 }
-// grpc_version
-CharacterVector grpc_version();
-RcppExport SEXP _grpc_grpc_version() {
+// robust_grpc_client_call
+Rcpp::RawVector robust_grpc_client_call(Rcpp::CharacterVector r_target_str, Rcpp::CharacterVector r_method_str, Rcpp::RawVector r_request_payload, SEXP r_metadata_sexp);
+RcppExport SEXP _grpc_robust_grpc_client_call(SEXP r_target_strSEXP, SEXP r_method_strSEXP, SEXP r_request_payloadSEXP, SEXP r_metadata_sexpSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    rcpp_result_gen = Rcpp::wrap(grpc_version());
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type r_target_str(r_target_strSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type r_method_str(r_method_strSEXP);
+    Rcpp::traits::input_parameter< Rcpp::RawVector >::type r_request_payload(r_request_payloadSEXP);
+    Rcpp::traits::input_parameter< SEXP >::type r_metadata_sexp(r_metadata_sexpSEXP);
+    rcpp_result_gen = Rcpp::wrap(robust_grpc_client_call(r_target_str, r_method_str, r_request_payload, r_metadata_sexp));
     return rcpp_result_gen;
 END_RCPP
 }
-// run
-List run(List target, CharacterVector hoststring, List hooks);
-RcppExport SEXP _grpc_run(SEXP targetSEXP, SEXP hoststringSEXP, SEXP hooksSEXP) {
+// minimal_start_server_test
+int minimal_start_server_test(std::string address_str);
+RcppExport SEXP _grpc_minimal_start_server_test(SEXP address_strSEXP) {
 BEGIN_RCPP
     Rcpp::RObject rcpp_result_gen;
     Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< List >::type target(targetSEXP);
-    Rcpp::traits::input_parameter< CharacterVector >::type hoststring(hoststringSEXP);
-    Rcpp::traits::input_parameter< List >::type hooks(hooksSEXP);
-    rcpp_result_gen = Rcpp::wrap(run(target, hoststring, hooks));
+    Rcpp::traits::input_parameter< std::string >::type address_str(address_strSEXP);
+    rcpp_result_gen = Rcpp::wrap(minimal_start_server_test(address_str));
     return rcpp_result_gen;
 END_RCPP
+}
+// robust_grpc_server_run
+void robust_grpc_server_run(Rcpp::List r_service_handlers, Rcpp::CharacterVector r_hoststring, Rcpp::List r_hooks, int r_server_duration_seconds);
+RcppExport SEXP _grpc_robust_grpc_server_run(SEXP r_service_handlersSEXP, SEXP r_hoststringSEXP, SEXP r_hooksSEXP, SEXP r_server_duration_secondsSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< Rcpp::List >::type r_service_handlers(r_service_handlersSEXP);
+    Rcpp::traits::input_parameter< Rcpp::CharacterVector >::type r_hoststring(r_hoststringSEXP);
+    Rcpp::traits::input_parameter< Rcpp::List >::type r_hooks(r_hooksSEXP);
+    Rcpp::traits::input_parameter< int >::type r_server_duration_seconds(r_server_duration_secondsSEXP);
+    robust_grpc_server_run(r_service_handlers, r_hoststring, r_hooks, r_server_duration_seconds);
+    return R_NilValue;
+END_RCPP
+}
+
+static const R_CallMethodDef CallEntries[] = {
+    {"_grpc_fetch", (DL_FUNC) &_grpc_fetch, 4},
+    {"_grpc_robust_grpc_client_call", (DL_FUNC) &_grpc_robust_grpc_client_call, 4},
+    {"_grpc_minimal_start_server_test", (DL_FUNC) &_grpc_minimal_start_server_test, 1},
+    {"_grpc_robust_grpc_server_run", (DL_FUNC) &_grpc_robust_grpc_server_run, 4},
+    {NULL, NULL, 0}
+};
+
+RcppExport void R_init_grpc(DllInfo *dll) {
+    R_registerRoutines(dll, NULL, CallEntries, NULL, NULL);
+    R_useDynamicSymbols(dll, FALSE);
 }

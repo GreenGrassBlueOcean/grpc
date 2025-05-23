@@ -2,17 +2,18 @@
 # Generator token: 10BE3573-1514-4C36-9D1C-5A225CD40393
 
 fetch <- function(server, method, requestArg, metadata) {
-    .Call('_grpc_fetch', PACKAGE = 'grpc', server, method, requestArg, metadata)
+    .Call(`_grpc_fetch`, server, method, requestArg, metadata)
 }
 
-#' Check grpc version
-#' @return version string and what g stands for
-#' @export
-grpc_version <- function() {
-    .Call('_grpc_grpc_version', PACKAGE = 'grpc')
+robust_grpc_client_call <- function(r_target_str, r_method_str, r_request_payload, r_metadata_sexp = NULL) {
+    .Call(`_grpc_robust_grpc_client_call`, r_target_str, r_method_str, r_request_payload, r_metadata_sexp)
 }
 
-run <- function(target, hoststring, hooks) {
-    .Call('_grpc_run', PACKAGE = 'grpc', target, hoststring, hooks)
+minimal_start_server_test <- function(address_str) {
+    .Call(`_grpc_minimal_start_server_test`, address_str)
+}
+
+robust_grpc_server_run <- function(r_service_handlers, r_hoststring, r_hooks, r_server_duration_seconds) {
+    invisible(.Call(`_grpc_robust_grpc_server_run`, r_service_handlers, r_hoststring, r_hooks, r_server_duration_seconds))
 }
 

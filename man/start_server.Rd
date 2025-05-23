@@ -2,23 +2,66 @@
 % Please edit documentation in R/server.R
 \name{start_server}
 \alias{start_server}
-\title{Start a gRPC server}
+\title{Start and Run a gRPC Server}
 \usage{
-start_server(impl, channel, hooks = grpc_default_hooks())
+start_server(
+  impl,
+  channel,
+  hooks = grpc_default_hooks(),
+  duration_seconds = 30
+)
 }
 \arguments{
-\item{impl}{an implementation of a proto service}
+\item{impl}{A named list defining the service implementation. Each element
+should correspond to a gRPC service method. The *name* of the element
+should be the method name (e.g., `'SayHello'`). The *value* should be a
+list containing: `RequestType` (the `RProtoBuf` message descriptor for
+the request, e.g., `P(MyRequest)`), `ResponseType` (the `RProtoBuf`
+message descriptor for the response, e.g., `P(MyResponse)`), and `f`
+(an R function that takes the request message object as input and returns
+the response message object).}
 
-\item{channel}{a channel string in 'host:port' format}
+\item{channel}{A string specifying the host and port for the server to bind
+to, in the format `'host:port'` (e.g., `'0.0.0.0:50051'` to listen on all
+interfaces, or `'localhost:50051'`).}
 
-\item{hooks}{list of R function(s) with \code{params} argument as a list to be run at different parts of the C++ calls. Supported hooks: \code{server_create}, \code{queue_create}, \code{bind} (when \code{params$port} becomes available), \code{server_start}, \code{run}, \code{shutdown}, \code{stopped}, \code{exit}}
+\item{hooks}{Optional list of hook functions to customize server behavior
+(see Details or `@seealso grpc_default_hooks`). Defaults to `grpc_default_hooks()`.
+Supported hooks: `server_create`, `queue_create`, `bind` (params$port is available),
+`server_start`, `run`, `shutdown`, `stopped`, `exit`.}
+
+\item{duration_seconds}{numeric duration that the server should be running defaults to 30 seconds}
 }
 \value{
-none
+This function is called for its side effects and normally blocks R
+  indefinitely. Returns `NULL` invisibly if the server shuts down (e.g., via Ctrl+C
+  or a shutdown hook).
 }
 \description{
-Start a gRPC server
+Starts and runs a gRPC server, listening on the specified channel and
+dispatching requests to the appropriate R functions in the implementation.
+This function typically blocks the R session while the server is running.
+}
+\examples{
+\dontrun{
+# Conceptual example - requires actual ProtoBuf message types
+# Assume MyRequest and MyResponse are RProtoBuf message types loaded via readProtoFiles()
+
+say_hello_impl <- function(request) {
+  message <- paste("Hello,", request$name)
+  # Assumes newResponse() helper exists and works based on this context
+  newResponse(message = message, WFUN = sys.function())
+}
+
+service_impl <- list(
+  SayHello = list(
+    RequestType = P(MyRequest),
+    ResponseType = P(MyResponse),
+    f = say_hello_impl
+  )
+)
+}
 }
 \seealso{
-\code{\link{grpc_default_hooks}}
+\code{\link{grpc_default_hooks}}, \code{\link{grpc_client}}
 }

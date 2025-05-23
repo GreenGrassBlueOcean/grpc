@@ -4,19 +4,25 @@ Title: gRPC Library
 Version: 0.2.0
 Author: Neal Fultz, Google
 Maintainer: Neal Fultz <nfultz@gmail.com>
-Description: Client and server scaffolding for Google's Remote Procedure Call framework
+Description: Provides R bindings for the gRPC framework (https://grpc.io/), 
+    allowing the creation of gRPC clients and servers within R. Includes 
+    functions for reading protocol buffer service definitions and generating 
+    client/server interfaces based on Google's Remote Procedure Call system.
 License: GPL-3
 Encoding: UTF-8
 LazyData: true
 Imports:
     Rcpp (>= 0.12.5),
     RProtoBuf,
-    futile.logger
+    futile.logger,
+    methods
 Suggests:
     testthat,
-    processx
+    processx,
+    jsonlite,
+    rpart
 LinkingTo: Rcpp
 SystemRequirements: 
     grpc (>= 4.0.0)
     protobuf
-RoxygenNote: 6.0.1
+RoxygenNote: 7.3.2

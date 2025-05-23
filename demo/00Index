@@ -1,6 +1,6 @@
-helloserver The standard Hello, World! server implementation
-helloclient The standard Hello, World! client implementation
-health-check-server The standard Hello, World! server implementation with standard health check
-health-check-client The standard Hello, World! client implementation with standard health check
-iris-server Building a basic model and using that for live-scoring
-iris-client A basic client to the live-scoring server
+health-check-client Health Check Client Demo
+health-check-server Health Check Server Demo
+helloclient         Hello World Client Demo
+helloserver         Hello World Server Demo
+iris-client         Iris Classifier Client Demo
+iris-server         Iris Classifier Server Demo

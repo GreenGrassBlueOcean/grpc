@@ -2,18 +2,32 @@
 % Please edit documentation in R/client.R
 \name{grpc_client}
 \alias{grpc_client}
-\title{Build a client handle}
+\title{Build a client handle (Revised)}
 \usage{
-grpc_client(impl, channel)
+grpc_client(services, channel)
 }
 \arguments{
-\item{channel}{what to connect to}
+\item{services}{A list describing the service implementation. Typically generated
+by \code{grpc::read_services()}. Each element corresponds to a service method.
+The *name* of the element is the simple method name (e.g., "SayHello").
+The *value* is a list containing:
+\code{name} (the fully qualified gRPC method string, e.g., "/package.Service/MethodName"),
+\code{RequestType} (the \code{RProtoBuf} MessageDescriptor for the request),
+\code{ResponseType} (the \code{RProtoBuf} MessageDescriptor for the response).}
 
-\item{stubs}{the stub of the service}
+\item{channel}{A string specifying the server address and port (e.g., "localhost:50051").}
 }
 \value{
-client handle
+A list where names correspond to service methods (simple names). Each element
+  is a list containing:
+  \itemize{
+    \item \code{call}: A function to execute the RPC. It takes the request message
+          object and an optional metadata character vector (key1, val1, key2, val2, ...).
+          It returns the deserialized response message object.
+    \item \code{build}: A function to create a new request message object of the
+          correct type. It takes arguments to be passed to \code{RProtoBuf::new()}.
+  }
 }
 \description{
-Build a client handle
+Creates a list of functions that can be used to call methods on a gRPC service.
 }

@@ -12,7 +12,7 @@ newResponse(..., WFUN = sys.function(-1))
 \item{WFUN}{A GRPC service method with RequestType and ResponseType attributes}
 }
 \value{
-
+Called for side effects (starts the server). Returns `NULL` invisibly.
 }
 \description{
 Construct a new ProtoBuf of ResponseType
