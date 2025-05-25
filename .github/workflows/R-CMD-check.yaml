@@ -56,6 +56,16 @@ jobs:
         run: |
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
+
+      - name: Find grpc/credentials.h (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Searching for grpc/credentials.h..."
+          sudo find /usr -name credentials.h | grep grpc
+          # Also check common include paths explicitly
+          ls -l /usr/include/grpc/credentials.h || echo "/usr/include/grpc/credentials.h not found"
+          ls -l /usr/local/include/grpc/credentials.h || echo "/usr/local/include/grpc/credentials.h not found"
+
       # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
         if: runner.os == 'Windows'
