@@ -57,43 +57,36 @@ jobs:
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
 
-      - name: Find gRPC C-core headers and verify pkg-config (Linux)
+      - name: Find and Verify gRPC C-core headers (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "--- Listing contents of /usr/include/grpc (if it exists) ---"
-          ls -R /usr/include/grpc || echo "/usr/include/grpc directory not found or ls failed"
+          echo "--- Locating 'grpc/grpc.h' (a key C-core header) ---"
+          # Try to find the directory containing 'grpc/grpc.h'
+          GRPC_H_DIR=$(sudo find /usr/include -type f -name grpc.h -exec dirname {} \; | grep '/grpc$' | head -n 1)
 
-          echo "--- Searching for 'credentials.h' within any 'grpc' subdirectory under /usr/include ---"
-          # This will find any path like /usr/include/.../grpc/credentials.h
-          FOUND_PATH=$(sudo find /usr/include -type f -path '*/grpc/credentials.h' -print -quit)
+          if [ -n "$GRPC_H_DIR" ]; then
+            echo "Found 'grpc.h' in directory: $GRPC_H_DIR"
+            # The include path should be the parent of this 'grpc' directory
+            # e.g., if GRPC_H_DIR is /usr/include/foo/grpc, then C_INCLUDE_DIR is /usr/include/foo
+            GRPC_C_INCLUDE_DIR=$(dirname "$GRPC_H_DIR")
+            echo "Deduced base include directory for -I: $GRPC_C_INCLUDE_DIR"
 
-          if [ -n "$FOUND_PATH" ]; then
-            echo "Found C-core credentials.h at: $FOUND_PATH"
-            # The include path needed is the directory *containing* the 'grpc' directory
-            # e.g., if path is /usr/include/abc/grpc/credentials.h, we need -I/usr/include/abc
-            VERIFIED_GRPC_C_INCLUDE_DIR=$(dirname "$FOUND_PATH" | sed 's|/grpc$||')
-            echo "Deduced C-core include directory for -I: $VERIFIED_GRPC_C_INCLUDE_DIR"
-            echo "VERIFIED_GRPC_C_INCLUDE_DIR=${VERIFIED_GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
+            echo "--- Verifying 'credentials.h' in the deduced path ---"
+            if [ -f "${GRPC_C_INCLUDE_DIR}/grpc/credentials.h" ]; then
+              echo "SUCCESS: Found ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
+              echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
+            else
+              echo "ERROR: credentials.h NOT FOUND at ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
+              echo "Listing contents of ${GRPC_C_INCLUDE_DIR}/grpc/ :"
+              ls -A "${GRPC_C_INCLUDE_DIR}/grpc/" || echo "Could not list ${GRPC_C_INCLUDE_DIR}/grpc/"
+              exit 1
+            fi
           else
-            echo "ERROR: C-core 'grpc/credentials.h' NOT FOUND under /usr/include."
-            echo "Listing all 'credentials.h' under /usr for inspection:"
-            sudo find /usr -name credentials.h || echo "No credentials.h found anywhere under /usr"
-            exit 1 # Fail the job if we can't find the core header
+            echo "ERROR: Core 'grpc/grpc.h' not found in a standard-looking location under /usr/include."
+            echo "Listing all 'grpc.h' under /usr for inspection:"
+            sudo find /usr -name grpc.h || echo "No grpc.h found anywhere under /usr"
+            exit 1
           fi
-
-          echo "--- Verifying pkg-config for grpc++ ---"
-          # ... (rest of pkg-config checks as before) ...
-          pkg-config --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
-          echo "grpc++ CFLAGS: $(pkg-config --cflags grpc++)"
-          echo "grpc++ LIBS: $(pkg-config --libs grpc++)"
-          echo "--- Verifying pkg-config for grpc (C-core, if .pc file exists) ---"
-          pkg-config --modversion grpc || echo "WARNING: pkg-config cannot find grpc (C-core)"
-          echo "grpc CFLAGS: $(pkg-config --cflags grpc)"
-          echo "grpc LIBS: $(pkg-config --libs grpc)"
-          echo "--- Verifying pkg-config for protobuf ---"
-          pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
-          echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
-          echo "protobuf LIBS: $(pkg-config --libs protobuf)"
 
       # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
