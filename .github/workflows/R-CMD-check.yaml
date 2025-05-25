@@ -27,12 +27,14 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
+      # For MSYS2 setup, specify UCRT64 environment for modern R
+      MSYSTEM: UCRT64 # For msys2/setup-msys2 to target the right environment
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Pandoc
+      - name: Setup Pandoc # Optional, if vignettes need it
         uses: r-lib/actions/setup-pandoc@v2
 
       - name: Set script permissions (Unix-like OS)
@@ -41,16 +43,7 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      # STEP 1: Setup R Environment
-      # This is where Rtools (MSYS2) is set up on Windows and its bash should be made available on PATH
-      - name: Setup R (${{ matrix.config.r }})
-        uses: r-lib/actions/setup-r@v2
-        with:
-          r-version: ${{ matrix.config.r }}
-          http-user-agent: ${{ matrix.config.http-user-agent }}
-          use-public-rspm: true
-
-      # STEP 2: Install System Dependencies
+      # System Dependencies - Non-Windows (before R setup)
       - name: Install system dependencies (Linux - Ubuntu 24.04)
         if: runner.os == 'Linux'
         run: |
@@ -64,43 +57,43 @@ jobs:
         run: |
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
-      - name: Install system dependencies (Windows)
+      # System Dependencies - Windows (using msys2/setup-msys2)
+      # This step should run before setup-r on Windows, so Rtools can pick up the installed tools.
+      - name: Setup MSYS2 and install gRPC/Protobuf (Windows)
         if: runner.os == 'Windows'
-        # Use 'bash'. The setup-r action should have configured Rtools (MSYS2)
-        # such that its bash is discoverable and configured for UCRT64.
-        shell: bash
-        # No 'env:' block needed here specifically for CHERE_INVOKING unless issues persist
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ env.MSYSTEM }} # Use UCRT64
+          update: true # Runs pacman -Syu internally and handles restarts
+          install: >- # Multi-line input for packages
+            mingw-w64-ucrt-x86_64-grpc
+            mingw-w64-ucrt-x86_64-protobuf
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-make
+            # mingw-w64-ucrt-x86_64-toolchain # Only if g++ isn't found later from Rtools
+
+      # Setup R Environment (after system deps, including MSYS2 setup on Windows)
+      - name: Setup R (${{ matrix.config.r }})
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      # Verification step for Windows tools (after both msys2 and R setup)
+      - name: Verification of tools in PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash # Should now use the MSYS2 bash from setup-msys2 or Rtools
         run: |
-          echo "Current PATH in MSYS2-like bash: $PATH"
-
-          echo "Step 1: Updating MSYS2 package databases..."
-          pacman -Sy --noconfirm || echo "pacman -Sy reported non-zero exit, but continuing..."
-
-          echo "Step 2: Updating core MSYS2 packages (pacman, msys2-runtime). This may cause shell to exit."
-          pacman -S --needed --noconfirm pacman msys2-runtime || true # Allow this to 'fail' if shell exits
-
-          echo "Step 3: Running full system update (pacman -Syu)..."
-          pacman -Syu --noconfirm || echo "First -Syu attempt done or failed."
-          pacman -Syu --noconfirm
-
-          echo "Step 4: Updating all other installed packages (pacman -Su)..."
-          pacman -Su --noconfirm
-
-          echo "Step 5: Installing build tools (pkg-config, make) for UCRT64..."
-          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-pkg-config \
-                                      mingw-w64-ucrt-x86_64-make
-
-          echo "Step 6: Installing gRPC and Protobuf for UCRT64 via pacman..."
-          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
-
-          echo "--- Verification: Tools in MSYS2 PATH ---"
-          which pkg-config || { echo "ERROR: pkg-config NOT FOUND after install"; exit 1; }
-          which make || { echo "ERROR: make NOT FOUND after install"; exit 1; }
-          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; } # g++ should come from Rtools mingw toolchain
+          echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
+          echo "PATH: $PATH"
+          which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
+          which make || { echo "ERROR: make NOT FOUND"; exit 1; }
+          # g++ should be part of the Rtools mingw toolchain, setup by setup-r
+          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
-      # STEP 3: Install R Package Dependencies
-      # ... (rest of the workflow as before) ...
+      # Install R Package Dependencies
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -109,8 +102,9 @@ jobs:
             any::sessioninfo
             any::desc
           needs: check
-          cache-enabled: false
+          cache-enabled: false # For debugging pak error, re-enable later
 
+      # Show Session Info
       - name: Show R Session Info
         shell: Rscript {0}
         run: |
@@ -118,6 +112,7 @@ jobs:
           pkgs <- installed.packages()[, "Version"]
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
+      # Run R CMD Check
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         with:
@@ -127,9 +122,9 @@ jobs:
           error-on: 'warning'
           check-dir: 'check'
 
+      # Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
-        # ... (as before) ...
         shell: Rscript {0}
         run: |
           pkg_name_desc <- read.dcf("DESCRIPTION", fields = "Package")[1,1]
@@ -155,6 +150,7 @@ jobs:
             print(list.files("check", recursive = TRUE, all.files = TRUE, full.names = TRUE))
           }
 
+      # Upload Full Check Results Directory on Failure
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
