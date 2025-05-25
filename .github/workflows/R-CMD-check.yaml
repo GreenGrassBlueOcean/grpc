@@ -4,9 +4,9 @@ name: R-CMD-check
 
 on:
   push:
-    branches: [main, master] # Adjust to your primary branch name(s)
+    branches: [main, master]
   pull_request:
-    branches: [main, master] # Adjust to your primary branch name(s)
+    branches: [main, master]
 
 permissions: read-all
 
@@ -32,7 +32,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Pandoc # Optional, if vignettes need it
+      - name: Setup Pandoc
         uses: r-lib/actions/setup-pandoc@v2
 
       - name: Set script permissions (Unix-like OS)
@@ -42,6 +42,7 @@ jobs:
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
       # STEP 1: Setup R Environment
+      # This is where Rtools (MSYS2) is set up on Windows and its bash should be made available on PATH
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
         with:
@@ -65,25 +66,22 @@ jobs:
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
-        # Use the RTOOLS_SHELL environment variable set by the setup-r action for robust MSYS2 execution
-        shell: ${{ env.RTOOLS_SHELL }} /usr/bin/bash -eo pipefail {0}
-        env:
-          CHERE_INVOKING: "true" # Often needed for correct path handling with this shell invocation
+        # Use 'bash'. The setup-r action should have configured Rtools (MSYS2)
+        # such that its bash is discoverable and configured for UCRT64.
+        shell: bash
+        # No 'env:' block needed here specifically for CHERE_INVOKING unless issues persist
         run: |
-          echo "Current MSYS2 PATH: $PATH"
+          echo "Current PATH in MSYS2-like bash: $PATH"
 
           echo "Step 1: Updating MSYS2 package databases..."
           pacman -Sy --noconfirm || echo "pacman -Sy reported non-zero exit, but continuing..."
 
           echo "Step 2: Updating core MSYS2 packages (pacman, msys2-runtime). This may cause shell to exit."
-          # If pacman or msys2-runtime are updated, pacman might try to exit the shell.
-          # '|| true' ensures this specific command doesn't fail the whole step if that happens.
-          pacman -S --needed --noconfirm pacman msys2-runtime || true
+          pacman -S --needed --noconfirm pacman msys2-runtime || true # Allow this to 'fail' if shell exits
 
           echo "Step 3: Running full system update (pacman -Syu)..."
-          # These might run in a "new" shell if the previous command forced an exit.
           pacman -Syu --noconfirm || echo "First -Syu attempt done or failed."
-          pacman -Syu --noconfirm # Run again to catch any remaining updates
+          pacman -Syu --noconfirm
 
           echo "Step 4: Updating all other installed packages (pacman -Su)..."
           pacman -Su --noconfirm
@@ -98,10 +96,11 @@ jobs:
           echo "--- Verification: Tools in MSYS2 PATH ---"
           which pkg-config || { echo "ERROR: pkg-config NOT FOUND after install"; exit 1; }
           which make || { echo "ERROR: make NOT FOUND after install"; exit 1; }
-          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
+          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; } # g++ should come from Rtools mingw toolchain
           echo "--- End Verification ---"
 
       # STEP 3: Install R Package Dependencies
+      # ... (rest of the workflow as before) ...
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -110,11 +109,8 @@ jobs:
             any::sessioninfo
             any::desc
           needs: check
-          # For debugging the 'pak' error "Cannot parse package: #.", cache is disabled.
-          # Re-enable caching (remove line below or set to true) once pak issue is resolved.
           cache-enabled: false
 
-      # STEP 4: Show Session Info (Optional, useful for debugging CI environment)
       - name: Show R Session Info
         shell: Rscript {0}
         run: |
@@ -122,19 +118,18 @@ jobs:
           pkgs <- installed.packages()[, "Version"]
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
-      # STEP 5: Run R CMD Check
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          error-on: 'warning'  # Corrected from error_on
-          check-dir: 'check'   # Corrected from check_dir
+          error-on: 'warning'
+          check-dir: 'check'
 
-      # STEP 6: Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
+        # ... (as before) ...
         shell: Rscript {0}
         run: |
           pkg_name_desc <- read.dcf("DESCRIPTION", fields = "Package")[1,1]
@@ -148,7 +143,6 @@ jobs:
           for (log_file_path in log_files_to_show) {
             if (file.exists(log_file_path)) {
               cat(sprintf("\n--- Start of %s ---\n", basename(log_file_path)))
-              # Use try() to prevent error if readLines fails (e.g., permission issues, though unlikely)
               try(writeLines(readLines(log_file_path)), silent = TRUE)
               cat(sprintf("\n--- End of %s ---\n", basename(log_file_path)))
             } else {
@@ -156,13 +150,11 @@ jobs:
             }
           }
 
-          # Fallback for listing files if primary logs are missing
           if (!any(sapply(log_files_to_show, file.exists))) {
-            cat("\n--- Files in 'check' directory structure (using base R list.files): ---\n")
+            cat("\n--- Files in 'check' directory structure (base R list.files): ---\n")
             print(list.files("check", recursive = TRUE, all.files = TRUE, full.names = TRUE))
           }
 
-      # STEP 7: Upload Full Check Results Directory on Failure
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
