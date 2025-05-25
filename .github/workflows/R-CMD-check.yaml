@@ -4,11 +4,11 @@ name: R-CMD-check
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master] # Adjust to your primary branch name(s)
   pull_request:
-    branches: [main, master]
+    branches: [main, master] # Adjust to your primary branch name(s)
 
-permissions: read-all
+permissions: read-all # Safe default, allows reading code, actions, etc.
 
 jobs:
   R-CMD-check:
@@ -25,13 +25,15 @@ jobs:
           - {os: macos-latest,   r: 'release'}
 
     env:
-      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
-      R_KEEP_PKG_SOURCE: yes
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} # For installing packages from GitHub if needed by dependencies
+      R_KEEP_PKG_SOURCE: yes # Helpful for debugging R CMD check failures
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-      - uses: r-lib/actions/setup-pandoc@v2 # If vignettes need Pandoc
+      - name: Setup Pandoc # Optional, if your vignettes or docs need Pandoc
+        uses: r-lib/actions/setup-pandoc@v2
 
       - name: Set script permissions (Unix-like OS)
         if: runner.os != 'Windows'
@@ -39,22 +41,29 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      # STEP 1: Setup R - This provides R, Rtools, and the RTOOLS_SHELL output
-      - uses: r-lib/actions/setup-r@v2
-        id: setup_r_step # ID is crucial for referencing its outputs
+      # STEP 1: Setup R Environment
+      # This step installs R and Rtools (on Windows).
+      # Crucially, on Windows, it exports RTOOLS_SHELL for subsequent MSYS2 steps.
+      - name: Setup R (${{ matrix.config.r }})
+        uses: r-lib/actions/setup-r@v2
+        # No 'id' needed here as we'll use the env var RTOOLS_SHELL it sets
         with:
           r-version: ${{ matrix.config.r }}
-          http-user-agent: ${{ matrix.config.http-user-agent }}
-          use-public-rspm: true
+          http-user-agent: ${{ matrix.config.http-user-agent }} # Often 'release' for devel builds
+          use-public-rspm: true # Use Posit Public Package Manager for faster binary installs
 
-      # STEP 2: Install System Dependencies (uses output from setup_r_step for Windows)
+      # STEP 2: Install System Dependencies for gRPC and Protobuf
       - name: Install system dependencies (Linux - Ubuntu 24.04)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            build-essential autoconf autoconf-archive pkg-config \
-            libgrpc-dev libgrpc++-dev protobuf-compiler libprotobuf-dev
+            build-essential \
+            autoconf \
+            autoconf-archive \
+            pkg-config \
+            libgrpc-dev libgrpc++-dev \
+            protobuf-compiler libprotobuf-dev
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
@@ -63,40 +72,45 @@ jobs:
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
-        shell: ${{ steps.setup_r_step.outputs.shell }} /usr/bin/bash -eo pipefail {0}
+        # Use the RTOOLS_SHELL environment variable set by the setup-r action
+        shell: ${{ env.RTOOLS_SHELL }} /usr/bin/bash -eo pipefail {0}
         env:
-          CHERE_INVOKING: "true"
+          CHERE_INVOKING: "true" # Often needed for correct path handling
         run: |
-          echo "Running pacman updates in MSYS2..."
-          pacman -Syu --noconfirm && pacman -Syu --noconfirm && pacman -Su --noconfirm
+          echo "Running pacman updates in MSYS2 (UCRT64 for R >= 4.2)..."
+          # Chain commands with '&&' to ensure script stops on first error due to -eo pipefail
+          pacman -Syu --noconfirm && \
+          pacman -Syu --noconfirm && \
+          pacman -Su --noconfirm
 
-          echo "Installing core build tools (pkg-config, make)..."
-          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-pkg-config mingw-w64-ucrt-x86_64-make
+          echo "Installing core build tools (pkg-config, make) for UCRT64..."
+          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-pkg-config \
+                                      mingw-w64-ucrt-x86_64-make
 
-          echo "Installing gRPC and Protobuf for UCRT64..."
+          echo "Installing gRPC and Protobuf for UCRT64 via pacman..."
           pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
 
           echo "--- Verification: Tools in MSYS2 PATH ---"
-          which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
-          which make || { echo "ERROR: make NOT FOUND"; exit 1; }
+          which pkg-config || { echo "ERROR: pkg-config NOT FOUND after install"; exit 1; }
+          which make || { echo "ERROR: make NOT FOUND after install"; exit 1; }
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
-      # STEP 3: Install R Dependencies
+      # STEP 3: Install R Package Dependencies
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
           extra-packages: |
             any::rcmdcheck
             any::sessioninfo
-            any::desc # If you add the DESCRIPTION validation step back
-          needs: check
-          # For debugging the pak error, you set cache-enabled: false
-          # You might want to remove this or set to true once pak error is resolved
+            any::desc # If using the DESCRIPTION validation step (currently removed for brevity)
+          needs: check # This tells pak to install dependencies needed for checking the package
+          # For debugging the 'pak' error "Cannot parse package: #.", cache is disabled.
+          # Re-enable caching (remove line below or set to true) once pak issue is fixed.
           cache-enabled: false
 
-      # STEP 4: Session Info (Optional, for debugging)
-      - name: Session Info (Post R setup and Dep Install)
+      # STEP 4: Show Session Info (Optional, useful for debugging CI environment)
+      - name: Show R Session Info
         shell: Rscript {0}
         run: |
           options(width = 100)
@@ -104,21 +118,25 @@ jobs:
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
       # STEP 5: Run R CMD Check
+      # This action runs R CMD build, then R CMD check on the tarball.
+      # It will use your ./configure script (on Unix) or src/Makevars.win (on Windows).
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         with:
-          upload-snapshots: true
-          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+          upload-snapshots: true # Uploads check results as snapshots, useful for r-lib
+          # Arguments for R CMD build:
+          build_args: 'c("--no-manual", "--compact-vignettes=gs+qpdf")'
+          # Arguments for R CMD check (passed to rcmdcheck):
           args: 'c("--no-manual", "--as-cran")'
-          error_on: 'warning'
-          check_dir: 'check'
+          error_on: 'warning' # Fail CI if R CMD check produces warnings
+          check_dir: 'check'  # Directory where check results will be stored
 
-      # STEP 6: Show Check Summary on Failure (Optional)
-      - name: Show check summary from 00check.log
+      # STEP 6: Display Check Log Summary on Failure (Optional, but helpful)
+      - name: Show check summary from 00check.log on failure
         if: failure()
         shell: Rscript {0}
         run: |
-          # Construct package name for R CMD check log path
+          # Dynamically get package name from DESCRIPTION file
           pkg_name_desc <- read.dcf("DESCRIPTION", fields = "Package")[1,1]
           check_log_path <- Sys.glob(file.path("check", paste0(pkg_name_desc, ".Rcheck"), "00check.log"))
           if (length(check_log_path) > 0 && file.exists(check_log_path[1])) {
@@ -126,16 +144,17 @@ jobs:
             writeLines(readLines(check_log_path[1]))
             cat(sprintf("\n--- End of %s ---\n", basename(check_log_path[1])))
           } else {
-            message(sprintf("00check.log not found for package '%s'. Looking in: %s", pkg_name_desc, file.path("check", paste0(pkg_name_desc, ".Rcheck"))))
-            # List files in check directory for debugging if log not found
-            cat("\n--- Files in 'check' directory: ---\n")
-            print(list.files("check", recursive = TRUE))
+            message(sprintf("00check.log not found for package '%s'. Searched in: %s",
+                            pkg_name_desc, file.path("check", paste0(pkg_name_desc, ".Rcheck"))))
+            # List files in check directory for further debugging if log not found
+            cat("\n--- Files in 'check' directory structure: ---\n")
+            print(fs::dir_tree("check", recurse = TRUE)) # Using fs::dir_tree for a nice view
           }
 
-      # STEP 7: Upload Full Check Results on Failure (Optional, but recommended)
+      # STEP 7: Upload Full Check Results Directory on Failure (Optional, but helpful)
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}-r${{ matrix.config.r }}-check-results
-          path: check
+          path: check # Uploads the entire 'check' directory
