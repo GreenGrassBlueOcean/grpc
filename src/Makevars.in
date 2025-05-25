@@ -1,12 +1,17 @@
 # src/Makevars.in -> src/Makevars
 
+# Attempt to use the path discovered by CI, with a fallback to /usr/include
+# The CI step should set VERIFIED_GRPC_C_INCLUDE_DIR
+# If it's not set (e.g. local build), it will be empty.
+GRPC_C_CORE_INCLUDE_FLAG = $(if $(VERIFIED_GRPC_C_INCLUDE_DIR),-I$(VERIFIED_GRPC_C_INCLUDE_DIR),-I/usr/include)
+
 # Flags detected by configure using pkg-config
 GRPC_PKG_CONFIG_CXXFLAGS = @GRPC_PKG_CXXFLAGS@
 GRPC_PKG_CONFIG_LIBS = @GRPC_PKG_LIBS@
 
-# Ensure standard system include path is always present for Unix-like systems
-# Prepend it to ensure it's searched.
-PKG_CXXFLAGS = -I/usr/include $(GRPC_PKG_CONFIG_CXXFLAGS)
+# Combine include paths
+# Put GRPC_C_CORE_INCLUDE_FLAG first, then pkg-config flags, then a general /usr/include as last resort
+PKG_CXXFLAGS = $(GRPC_C_CORE_INCLUDE_FLAG) $(GRPC_PKG_CONFIG_CXXFLAGS) -I/usr/include
 PKG_LIBS = $(GRPC_PKG_CONFIG_LIBS)
 
 # C++ Standard determined by configure (should be C++17)
