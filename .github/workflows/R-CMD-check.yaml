@@ -70,7 +70,27 @@ jobs:
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-toolchain
 
-      # Verify pkg-config on Unix-like systems (after installing system deps)
+      # Setup R Environment
+      - name: Setup R (${{ matrix.config.r }})
+        uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
+
+      # Verification step for Windows tools
+      - name: Verification of tools in PATH (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
+          echo "PATH: $PATH"
+          which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
+          which make || { echo "ERROR: make NOT FOUND"; exit 1; }
+          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
+          echo "--- End Verification ---"
+
+      # Verify pkg-config on Unix-like systems
       - name: Verify pkg-config setup (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
         run: |
@@ -83,25 +103,6 @@ jobs:
           echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
           echo "protobuf LIBS: $(pkg-config --libs protobuf)"
 
-      # Setup R Environment
-      - name: Setup R (${{ matrix.config.r }})
-        uses: r-lib/actions/setup-r@v2
-        with:
-          r-version: ${{ matrix.config.r }}
-          http-user-agent: ${{ matrix.config.http-user-agent }}
-          use-public-rspm: true
-
-      # Verification step for Windows tools (after both msys2 and R setup)
-      - name: Verification of tools in PATH (Windows)
-        if: runner.os == 'Windows'
-        shell: bash
-        run: |
-          echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
-          echo "PATH: $PATH"
-          which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
-          which make || { echo "ERROR: make NOT FOUND"; exit 1; }
-          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
-          echo "--- End Verification ---"
 
       # Install R Package Dependencies
       - name: Install R dependencies
@@ -111,8 +112,8 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          # Removed 'needs: check' from previous version as it was invalid
-          cache-enabled: false # Keep for debugging potential pak issues
+          # Use 'cache: false' to disable caching, not 'cache-enabled: false'
+          cache: false # For debugging pak error, re-enable later by removing or setting to true
 
       # Show Session Info
       - name: Show R Session Info
@@ -122,10 +123,6 @@ jobs:
           pkgs <- installed.packages()[, "Version"]
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
-      # Create 'check' directory - check-r-package action does this if check-dir is specified
-      # - name: Create check directory
-      #   run: mkdir -p check
-
       # Run R CMD Check
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
@@ -134,8 +131,8 @@ jobs:
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
 
-          # error-on: 'warning' # Corrected input name
-          # check-dir: 'check'   # Corrected input name
+          #error-on: 'warning' # This is a valid input
+          #check-dir: 'check'   # This is a valid input
 
       # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
@@ -146,6 +143,7 @@ jobs:
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
 
       # Display Check Logs on Failure
+      # ... (this step can remain as is) ...
       - name: Show check logs on failure
         if: failure()
         shell: Rscript {0}
@@ -174,6 +172,7 @@ jobs:
           }
 
       # Upload Full Check Results Directory on Failure
+      # ... (this step can remain as is) ...
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
