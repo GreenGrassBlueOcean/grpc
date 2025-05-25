@@ -70,7 +70,8 @@ jobs:
             mingw-w64-ucrt-x86_64-protobuf
             mingw-w64-ucrt-x86_64-pkg-config
             mingw-w64-ucrt-x86_64-make
-            # mingw-w64-ucrt-x86_64-toolchain # Only if g++ isn't found later from Rtools
+
+      # mingw-w64-ucrt-x86_64-toolchain # Only if g++ isn't found later from Rtools
 
       # Setup R Environment (after system deps, including MSYS2 setup on Windows)
       - name: Setup R (${{ matrix.config.r }})
