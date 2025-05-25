@@ -133,8 +133,9 @@ jobs:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          error-on: 'warning' # Corrected input name
-          check-dir: 'check'   # Corrected input name
+
+          # error-on: 'warning' # Corrected input name
+          # check-dir: 'check'   # Corrected input name
 
       # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
