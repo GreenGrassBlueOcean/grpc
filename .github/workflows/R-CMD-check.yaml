@@ -27,14 +27,13 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
-      # For MSYS2 setup, specify UCRT64 environment for modern R
       MSYSTEM: UCRT64 # For msys2/setup-msys2 to target the right environment
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Pandoc # Optional, if vignettes need it
+      - name: Setup Pandoc
         uses: r-lib/actions/setup-pandoc@v2
 
       - name: Set script permissions (Unix-like OS)
@@ -43,7 +42,7 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      # System Dependencies - Non-Windows (before R setup)
+      # System Dependencies - Non-Windows (before R setup, though order less critical here)
       - name: Install system dependencies (Linux - Ubuntu 24.04)
         if: runner.os == 'Linux'
         run: |
@@ -58,22 +57,20 @@ jobs:
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
       # System Dependencies - Windows (using msys2/setup-msys2)
-      # This step should run before setup-r on Windows, so Rtools can pick up the installed tools.
-      - name: Setup MSYS2 and install gRPC/Protobuf (Windows)
+      - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
           msystem: ${{ env.MSYSTEM }} # Use UCRT64
           update: true # Runs pacman -Syu internally and handles restarts
-          install: >- # Multi-line input for packages
+          install: >-
             mingw-w64-ucrt-x86_64-grpc
             mingw-w64-ucrt-x86_64-protobuf
             mingw-w64-ucrt-x86_64-pkg-config
             mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-toolchain # For g++, etc.
 
-      # mingw-w64-ucrt-x86_64-toolchain # Only if g++ isn't found later from Rtools
-
-      # Setup R Environment (after system deps, including MSYS2 setup on Windows)
+      # Setup R Environment (after system deps, especially after msys2/setup-msys2 on Windows)
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
         with:
@@ -84,13 +81,13 @@ jobs:
       # Verification step for Windows tools (after both msys2 and R setup)
       - name: Verification of tools in PATH (Windows)
         if: runner.os == 'Windows'
-        shell: bash # Should now use the MSYS2 bash from setup-msys2 or Rtools
+        shell: bash # Should use the MSYS2 bash configured by setup-msys2 and setup-r
         run: |
           echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
           echo "PATH: $PATH"
+          # The following should now be found from the UCRT64 environment setup by msys2/setup-msys2
           which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
           which make || { echo "ERROR: make NOT FOUND"; exit 1; }
-          # g++ should be part of the Rtools mingw toolchain, setup by setup-r
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
@@ -102,8 +99,8 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          needs: check
-          cache-enabled: false # For debugging pak error, re-enable later
+          # Removed 'needs: check' which was invalid here
+          cache-enabled: false # For debugging pak error, re-enable later by removing or setting to true
 
       # Show Session Info
       - name: Show R Session Info
@@ -114,14 +111,26 @@ jobs:
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
       # Run R CMD Check
+      # No need to 'mkdir -p check'; check-r-package handles the check_dir.
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          error-on: 'warning'
+          error-on: 'warning' # Keep as warning for now, can change to 'error' if too many CI passes with warnings
           check-dir: 'check'
+
+      # Attempt to clean up known problematic temp files on Windows if check fails
+      - name: Cleanup potentially locked temp files (Windows)
+        if: runner.os == 'Windows' && failure()
+        shell: bash # Or pwsh or cmd, depending on what's best for file deletion
+        run: |
+          echo "Attempting to clean up DumpStack.log.tmp..."
+          rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
+          # Note: The path D:\DumpStack.log.tmp needs to be correct for the runner.
+          # In MSYS2 bash, D drive is usually /d/
+          # If using powershell: Remove-Item -Path "D:\DumpStack.log.tmp" -ErrorAction SilentlyContinue
 
       # Display Check Logs on Failure
       - name: Show check logs on failure
