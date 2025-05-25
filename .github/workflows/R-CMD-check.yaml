@@ -27,7 +27,7 @@ jobs:
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
-      MSYSTEM: UCRT64 # For msys2/setup-msys2 to target the right environment
+      MSYSTEM: UCRT64
 
     steps:
       - name: Checkout repository
@@ -42,7 +42,7 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      # System Dependencies - Non-Windows (before R setup, though order less critical here)
+      # System Dependencies - Non-Windows
       - name: Install system dependencies (Linux - Ubuntu 24.04)
         if: runner.os == 'Linux'
         run: |
@@ -56,13 +56,13 @@ jobs:
         run: |
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
-      # System Dependencies - Windows (using msys2/setup-msys2)
+      # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
         if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2
         with:
-          msystem: ${{ env.MSYSTEM }} # Use UCRT64
-          update: true # Runs pacman -Syu internally and handles restarts
+          msystem: ${{ env.MSYSTEM }}
+          update: true
           install: >-
             mingw-w64-ucrt-x86_64-grpc
             mingw-w64-ucrt-x86_64-protobuf
@@ -70,7 +70,20 @@ jobs:
             mingw-w64-ucrt-x86_64-make
             mingw-w64-ucrt-x86_64-toolchain
 
-      # Setup R Environment (after system deps, especially after msys2/setup-msys2 on Windows)
+      # Verify pkg-config on Unix-like systems (after installing system deps)
+      - name: Verify pkg-config setup (Linux/macOS)
+        if: runner.os == 'Linux' || runner.os == 'macOS'
+        run: |
+          echo "Verifying pkg-config for grpc++..."
+          pkg-config --modversion grpc++ || { echo "ERROR: pkg-config cannot find grpc++"; exit 1; }
+          echo "grpc++ CFLAGS: $(pkg-config --cflags grpc++)"
+          echo "grpc++ LIBS: $(pkg-config --libs grpc++)"
+          echo "Verifying pkg-config for protobuf..."
+          pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
+          echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
+          echo "protobuf LIBS: $(pkg-config --libs protobuf)"
+
+      # Setup R Environment
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
         with:
@@ -81,11 +94,10 @@ jobs:
       # Verification step for Windows tools (after both msys2 and R setup)
       - name: Verification of tools in PATH (Windows)
         if: runner.os == 'Windows'
-        shell: bash # Should use the MSYS2 bash configured by setup-msys2 and setup-r
+        shell: bash
         run: |
           echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
           echo "PATH: $PATH"
-          # The following should now be found from the UCRT64 environment setup by msys2/setup-msys2
           which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
           which make || { echo "ERROR: make NOT FOUND"; exit 1; }
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
@@ -99,6 +111,8 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
+          # Removed 'needs: check' from previous version as it was invalid
+          cache-enabled: false # Keep for debugging potential pak issues
 
       # Show Session Info
       - name: Show R Session Info
@@ -108,30 +122,27 @@ jobs:
           pkgs <- installed.packages()[, "Version"]
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
-      - name: Ensure Check Directory Exists
-        run: mkdir -p check
+      # Create 'check' directory - check-r-package action does this if check-dir is specified
+      # - name: Create check directory
+      #   run: mkdir -p check
 
       # Run R CMD Check
-      # No need to 'mkdir -p check'; check-r-package handles the check_dir.
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
+          error-on: 'warning' # Corrected input name
+          check-dir: 'check'   # Corrected input name
 
-       # check-dir: 'check'
-
-      # Attempt to clean up known problematic temp files on Windows if check fails
+      # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
         if: runner.os == 'Windows' && failure()
-        shell: bash # Or pwsh or cmd, depending on what's best for file deletion
+        shell: bash
         run: |
           echo "Attempting to clean up DumpStack.log.tmp..."
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
-          # Note: The path D:\DumpStack.log.tmp needs to be correct for the runner.
-          # In MSYS2 bash, D drive is usually /d/
-          # If using powershell: Remove-Item -Path "D:\DumpStack.log.tmp" -ErrorAction SilentlyContinue
 
       # Display Check Logs on Failure
       - name: Show check logs on failure
