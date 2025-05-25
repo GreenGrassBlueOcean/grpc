@@ -10,7 +10,7 @@ read_services(file)
 \item{file}{the spec file}
 }
 \value{
-a stub data structure
+a stub data structure (the 'impl' object)
 }
 \description{
 Create stub object from protobuf spec

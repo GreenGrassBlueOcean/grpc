@@ -4,3 +4,5 @@ helloclient         Hello World Client Demo
 helloserver         Hello World Server Demo
 iris-client         Iris Classifier Client Demo
 iris-server         Iris Classifier Server Demo
+client-test2        Complete Hello World Client Demo With Advanced Logging
+server-test1        Complete Hello World Server Demo With Advanced Logging

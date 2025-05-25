@@ -1,22 +1,32 @@
+// common.h
 #ifndef RGRPC_H
 #define RGRPC_H
 
-/* Uncomment the line below to enable detailed gRPC debug logging to the R console */
-#define RGRPC_DEBUG
+// Define log levels
+enum RGRPC_LOG_LEVEL {
+  RGRPC_LOG_LEVEL_NONE = 0, // Or OFF
+  RGRPC_LOG_LEVEL_ERROR = 1,
+  RGRPC_LOG_LEVEL_WARN = 2,
+  RGRPC_LOG_LEVEL_INFO = 3,
+  RGRPC_LOG_LEVEL_DEBUG = 4,
+  RGRPC_LOG_LEVEL_TRACE = 5 // Most verbose
+};
 
-#ifdef RGRPC_DEBUG
-// If RGRPC_DEBUG is enabled, include Rcpp.h for Rcpp::Rcout and iostream for std::endl
-#ifndef RCPP_H_GEN_
-#include <Rcpp.h> // This guard is typical for Rcpp.h inclusion
-#endif
-#include <iostream> // For std::endl
-// Define the logging macro to print messages
-#define RGRPC_LOG(msg) Rcpp::Rcout << "[gRPC Debug] (" << __FILE__ << ":" << __LINE__ << ") " << msg << std::endl
-#else
-// If RGRPC_DEBUG is not defined, the logging macro does nothing
-#define RGRPC_LOG(msg)
-#endif
+extern RGRPC_LOG_LEVEL rgrpc_global_log_level;
 
-// No need to define RESERVED as NULL; just use NULL directly in gRPC C API calls.
+// Macro to check current level before logging
+#define RGRPC_LOG(level, msg)                                                                            \
+if (rgrpc_global_log_level >= level) {                                                                   \
+  /* Prepend level string if desired */                                                                  \
+  /* For simplicity here, just like before: */                                                           \
+  Rcpp::Rcout << "[gRPC " << #level << "] (" << __FILE__ << ":" << __LINE__ << ") " << msg << std::endl; \
+}
+
+// Convenience macros for each level
+#define RGRPC_LOG_ERROR(msg) RGRPC_LOG(RGRPC_LOG_LEVEL_ERROR, msg)
+#define RGRPC_LOG_WARN(msg)  RGRPC_LOG(RGRPC_LOG_LEVEL_WARN, msg)
+#define RGRPC_LOG_INFO(msg)  RGRPC_LOG(RGRPC_LOG_LEVEL_INFO, msg)
+#define RGRPC_LOG_DEBUG(msg) RGRPC_LOG(RGRPC_LOG_LEVEL_DEBUG, msg)
+#define RGRPC_LOG_TRACE(msg) RGRPC_LOG(RGRPC_LOG_LEVEL_TRACE, msg)
 
 #endif // RGRPC_H

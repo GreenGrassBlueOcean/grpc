@@ -2,18 +2,62 @@
 % Please edit documentation in R/server.R
 \name{newResponse}
 \alias{newResponse}
-\title{Construct a new ProtoBuf of ResponseType}
+\title{Construct a Response Message Object for a gRPC Service Handler}
 \usage{
-newResponse(..., WFUN = sys.function(-1))
+newResponse(..., WFUN = sys.function(sys.parent()))
 }
 \arguments{
-\item{...}{threaded through to the ProtoBuf constructor}
+\item{...}{Arguments to be passed to `RProtoBuf::new()` to populate the fields
+of the response message. These should match the fields defined in your
+`.proto` file for the response message type.}
 
-\item{WFUN}{A GRPC service method with RequestType and ResponseType attributes}
+\item{WFUN}{(Advanced Usage) The calling R handler function. This defaults to
+the parent frame's function (`sys.function(sys.parent())`), which is
+typically the user's gRPC service handler function (e.g., their `SayHello`
+implementation) as wrapped by `start_server`. This argument allows
+`newResponse` to find the `ResponseTypeDescriptor` attribute. It's
+generally not necessary for users to set this argument manually.}
 }
 \value{
-Called for side effects (starts the server). Returns `NULL` invisibly.
+An RProtoBuf message object of the type expected for the response of
+  the calling gRPC service handler.
 }
 \description{
-Construct a new ProtoBuf of ResponseType
+This is a helper function designed to be called from within user-defined
+R functions that handle gRPC service method calls. It uses attributes
+(specifically `ResponseTypeDescriptor`) attached to the handler function
+by `start_server` to automatically determine the correct RProtoBuf message
+type for the response.
+}
+\examples{
+\dontrun{
+# This function is typically used inside a service handler function.
+# Assume 'MyResponse' is the RProtoBuf message type for the response,
+# and 'start_server' has correctly attributed the handler.
+
+# Example handler for a service method:
+my_service_handler <- function(request) {
+  # ... process request ...
+  response_message_text <- paste("Responding to:", request$name)
+
+  # Use newResponse to create the response message object.
+  # 'message' here is assumed to be a field in 'MyResponse.proto'.
+  newResponse(message = response_message_text, other_field = 123)
+}
+
+# The 'impl' structure for start_server would look like:
+# service_impl <- list(
+#   MyMethod = list(
+#     RequestType = P(MyRequest),  # RProtoBuf Descriptor for request
+#     ResponseType = P(MyResponse), # RProtoBuf Descriptor for response
+#     f = my_service_handler
+#   )
+# )
+#
+# When 'my_service_handler' is called by the gRPC server framework (via start_server),
+# 'newResponse()' will correctly use P(MyResponse) to create the new message.
+}
+}
+\seealso{
+\code{\link{start_server}}
 }

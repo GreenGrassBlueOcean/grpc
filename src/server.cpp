@@ -29,35 +29,35 @@ static char* slice_to_c_string_safe(grpc_slice slice) {
 }
 
 
+// src/server.cpp
+
 // Helper function to call R hook functions
 void call_r_hook(const Rcpp::List& hooks,
                  const std::string& hook_name,
-                 const Rcpp::List& params = Rcpp::List::create()
-                ) {
+                 const Rcpp::List& params_to_send) { // Renamed the third argument for clarity
   if (hooks.containsElementNamed(hook_name.c_str())) {
     try {
-      Rcpp::Function hook_function = Rcpp::as<Rcpp::Function>(hooks[hook_name]); // Ensure it's a function
-      RGRPC_LOG("Robust Server: Calling R hook: " << hook_name);
-      if (params.size() > 0) {
-        hook_function(params);
-      } else {
-        hook_function(); // Call without arguments if params is empty
-      }
-      RGRPC_LOG("Robust Server: R hook " << hook_name << " finished.");
+      Rcpp::Function hook_function = Rcpp::as<Rcpp::Function>(hooks[hook_name]);
+      RGRPC_LOG_TRACE("Robust Server: Calling R hook: " << hook_name);
+
+      // ALWAYS call the R function with the params_to_send list.
+      // If params_to_send is an empty list, the R function receives an empty list.
+      hook_function(params_to_send);
+
+      RGRPC_LOG_TRACE("Robust Server: R hook " << hook_name << " finished.");
     } catch (Rcpp::exception& ex) {
       Rcpp::Rcerr << "[gRPC Server Warning] Exception in R hook '" << hook_name << "': " << ex.what() << std::endl;
-      RGRPC_LOG("Robust Server: Exception in R hook '" << hook_name << "': " << ex.what());
-      // Decide if you want to Rcpp::stop() or just log the error and continue server operation
+      RGRPC_LOG_TRACE("Robust Server: Exception in R hook '" << hook_name << "': " << ex.what());
     } catch (std::exception& ex_std) {
       Rcpp::Rcerr << "[gRPC Server Warning] std::exception in R hook '" << hook_name << "': " << ex_std.what() << std::endl;
-      RGRPC_LOG("Robust Server: std::exception in R hook '" << hook_name << "': " << ex_std.what());
+      RGRPC_LOG_TRACE("Robust Server: std::exception in R hook '" << hook_name << "': " << ex_std.what());
     }
     catch (...) {
       Rcpp::Rcerr << "[gRPC Server Warning] Unknown exception in R hook '" << hook_name << "'." << std::endl;
-      RGRPC_LOG("Robust Server: Unknown exception in R hook '" << hook_name << "'.");
+      RGRPC_LOG_TRACE("Robust Server: Unknown exception in R hook '" << hook_name << "'.");
     }
   } else {
-    RGRPC_LOG("Robust Server: R hook " << hook_name << " not found.");
+    RGRPC_LOG_INFO("Robust Server: R hook " << hook_name << " not found.");
   }
 }
 
@@ -87,7 +87,7 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
                              int r_server_duration_seconds       // Default was 30, can be 0 for indefinite
                              ) {
 
-  RGRPC_LOG("Robust Server: Initializing gRPC core...");
+  RGRPC_LOG_INFO("Robust Server: Initializing gRPC core...");
 
   // --- ADD GRPC TRACERS ---
   // To enable all tracers:
@@ -103,12 +103,15 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
 
   grpc_init();
 
+  // Define an empty list to reuse for hooks that don't have specific C++ params
+  Rcpp::List empty_params = Rcpp::List::create();
+
   grpc_server* server = grpc_server_create(NULL, NULL);
   if (!server) {
     grpc_shutdown();
     Rcpp::stop("Robust Server: grpc_server_create failed.");
   }
-  call_r_hook(r_hooks, "server_create");
+  call_r_hook(r_hooks, "server_create", empty_params);
 
   grpc_completion_queue* cq = grpc_completion_queue_create_for_next(NULL);
   if (!cq) {
@@ -116,12 +119,12 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
     grpc_shutdown();
     Rcpp::stop("Robust Server: grpc_completion_queue_create_for_next failed.");
   }
-  call_r_hook(r_hooks, "queue_create");
+  call_r_hook(r_hooks, "queue_create", empty_params);
 
   grpc_server_register_completion_queue(server, cq, NULL);
 
   std::string host_str = Rcpp::as<std::string>(r_hoststring[0]);
-  RGRPC_LOG("Robust Server: Binding to " << host_str);
+  RGRPC_LOG_INFO("Robust Server: Binding to " << host_str);
   grpc_server_credentials* insecure_creds = grpc_insecure_server_credentials_create();
   int port = grpc_server_add_http2_port(server, host_str.c_str(), insecure_creds);
   Rcpp::List bind_params = Rcpp::List::create(Rcpp::Named("port") = port);
@@ -134,9 +137,9 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
     grpc_shutdown();
     Rcpp::stop("Robust Server: Failed to bind server to port " + host_str);
   }
-  RGRPC_LOG("Robust Server: Started, listening on port " << port);
+  RGRPC_LOG_INFO("Robust Server: Started, listening on port " << port);
   grpc_server_start(server);
-  call_r_hook(r_hooks, "server_start");
+  call_r_hook(r_hooks, "server_start", empty_params);
 
   // --- Server Loop ---
   // State for handling one call at a time (simplified for this example)
@@ -151,10 +154,10 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
   bool done = false;
 
   // Initial request for a new call
-  RGRPC_LOG("Robust Server: Requesting first call with tag " << TAG_REQUEST_NEW_CALL);
+  RGRPC_LOG_DEBUG("Robust Server: Requesting first call with tag " << TAG_REQUEST_NEW_CALL);
   grpc_call_error request_error = grpc_server_request_call(server, &current_call, &call_details, &request_metadata_recv, cq, cq, TAG_REQUEST_NEW_CALL);
   if (request_error != GRPC_CALL_OK) {
-    RGRPC_LOG("Robust Server: Initial grpc_server_request_call failed! Error: " << request_error);
+    RGRPC_LOG_INFO("Robust Server: Initial grpc_server_request_call failed! Error: " << request_error);
     // Consider stopping the server if this fails, as it can't accept calls.
     done = true;
   }
@@ -163,18 +166,18 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
   gpr_timespec loop_deadline = gpr_time_add(gpr_now(GPR_CLOCK_REALTIME), gpr_time_from_seconds(r_server_duration_seconds, GPR_TIMESPAN));
 
 
-  call_r_hook(r_hooks, "run");
+  call_r_hook(r_hooks, "run", empty_params);
   while (!done) {
     try {
       Rcpp::checkUserInterrupt(); // Check for R interrupt periodically
     } catch (Rcpp::internal::InterruptedException& e) {
-      RGRPC_LOG("Robust Server: R interrupt detected, initiating shutdown.");
+      RGRPC_LOG_INFO("Robust Server: R interrupt detected, initiating shutdown.");
       done = true; // Will break out and go to shutdown sequence
       continue;
     }
 
     if (gpr_time_cmp(gpr_now(GPR_CLOCK_REALTIME), loop_deadline) > 0 && r_server_duration_seconds > 0) {
-      RGRPC_LOG("Robust Server: Server duration reached, initiating shutdown.");
+      RGRPC_LOG_INFO("Robust Server: Server duration reached, initiating shutdown.");
       done = true;
       continue;
     }
@@ -192,21 +195,21 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
     else if (event.type == GRPC_OP_COMPLETE) event_type_str = "GRPC_OP_COMPLETE(1)";
     else if (event.type == GRPC_QUEUE_SHUTDOWN) event_type_str = "GRPC_QUEUE_SHUTDOWN(2)";
 
-    RGRPC_LOG("Robust Server: Event - Type: " << event_type_str << " Tag: " << event.tag << " Success: " << event.success);
+    RGRPC_LOG_TRACE("Robust Server: Event - Type: " << event_type_str << " Tag: " << event.tag << " Success: " << event.success);
 
     if (event.type == GRPC_QUEUE_TIMEOUT) {
-      RGRPC_LOG("Robust Server: CQ Timeout. Continuing loop."); // Add specific log
+      RGRPC_LOG_TRACE("Robust Server: CQ Timeout. Continuing loop."); // Add specific log
       continue;
     }
 
 
-    RGRPC_LOG("Robust Server: Event type: " << event.type << " Tag: " << event.tag << " Success: " << event.success);
+    RGRPC_LOG_TRACE("Robust Server: Event type: " << event.type << " Tag: " << event.tag << " Success: " << event.success);
 
     if (event.type == GRPC_QUEUE_TIMEOUT) {
       continue; // Loop to check interrupt or server duration
     }
     if (event.type == GRPC_QUEUE_SHUTDOWN) {
-      RGRPC_LOG("Robust Server: CQ shutdown event received. Exiting loop.");
+      RGRPC_LOG_TRACE("Robust Server: CQ shutdown event received. Exiting loop.");
       done = true;
       continue;
     }
@@ -214,17 +217,17 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
     // --- Process completion event ---
     if (event.tag == TAG_REQUEST_NEW_CALL) {
       if (!event.success) {
-        RGRPC_LOG("Robust Server: New call request failed or server shutting down. Requesting next call.");
+        RGRPC_LOG_TRACE("Robust Server: New call request failed or server shutting down. Requesting next call.");
         // If server is not shutting down, re-request. If it is, this will eventually stop.
         grpc_call_error request_error = grpc_server_request_call(server, &current_call, &call_details, &request_metadata_recv, cq, cq, TAG_REQUEST_NEW_CALL);
         if (request_error != GRPC_CALL_OK) {
-          RGRPC_LOG("Robust Server: New call request failed or server shutting down, ERROR: " << request_error);
+          RGRPC_LOG_INFO("Robust Server: New call request failed or server shutting down, ERROR: " << request_error);
           // Consider stopping the server if this fails, as it can't accept calls.
           done = true;
         }
         continue;
       }
-      RGRPC_LOG("Robust Server: New call accepted. Method: " << (slice_to_c_string_safe(call_details.method) ? slice_to_c_string_safe(call_details.method) : "N/A"));
+      RGRPC_LOG_TRACE("Robust Server: New call accepted. Method: " << (slice_to_c_string_safe(call_details.method) ? slice_to_c_string_safe(call_details.method) : "N/A"));
 
       // current_call is now valid. Prepare to read client's message.
       grpc_op ops_read[2];
@@ -241,10 +244,10 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
       op_r_ptr->data.recv_message.recv_message = &client_request_payload_bb;
       op_r_ptr->flags = 0; op_r_ptr->reserved = NULL; op_r_ptr++;
 
-      RGRPC_LOG("Robust Server: Starting batch to RECV_MESSAGE with tag " << TAG_READ_CLIENT_REQUEST);
+      RGRPC_LOG_TRACE("Robust Server: Starting batch to RECV_MESSAGE with tag " << TAG_READ_CLIENT_REQUEST);
       grpc_call_error error_read = grpc_call_start_batch(current_call, ops_read, (size_t)(op_r_ptr - ops_read), TAG_READ_CLIENT_REQUEST, NULL);
       if (error_read != GRPC_CALL_OK) {
-        RGRPC_LOG("Robust Server: Failed to start batch for RECV_MESSAGE. Error: " << error_read);
+        RGRPC_LOG_INFO("Robust Server: Failed to start batch for RECV_MESSAGE. Error: " << error_read);
         // Clean up this call attempt and request a new one
         grpc_call_details_destroy(&call_details); // Destroy old details
         grpc_metadata_array_destroy(&request_metadata_recv); // Destroy old metadata
@@ -252,7 +255,7 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
         current_call = nullptr;
         grpc_call_error request_error = grpc_server_request_call(server, &current_call, &call_details, &request_metadata_recv, cq, cq, TAG_REQUEST_NEW_CALL);
         if (request_error != GRPC_CALL_OK) {
-          RGRPC_LOG("Robust Server: Failed to start batch for RECV_MESSAGE! Error: " << request_error);
+          RGRPC_LOG_INFO("Robust Server: Failed to start batch for RECV_MESSAGE! Error: " << request_error);
           // Consider stopping the server if this fails, as it can't accept calls.
           done = true;
         }
@@ -268,7 +271,7 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
       //const char* status_details_str = "OK";
 
       if (!event.success) {
-        RGRPC_LOG("Robust Server: RECV_MESSAGE batch failed (e.g., client cancelled). Sending error.");
+        RGRPC_LOG_DEBUG("Robust Server: RECV_MESSAGE batch failed (e.g., client cancelled). Sending error.");
         status_to_send = GRPC_STATUS_CANCELLED; // Or INTERNAL, depending on why
         status_details_cpp_str = "Failed to receive client message or client cancelled.";
         if (client_request_payload_bb) { // Should be NULL if RECV_MESSAGE part failed
@@ -276,18 +279,18 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
           client_request_payload_bb = nullptr;
         }
       } else {
-        RGRPC_LOG("Robust Server: RECV_MESSAGE batch success.");
+        RGRPC_LOG_TRACE("Robust Server: RECV_MESSAGE batch success.");
         char* method_c_str = slice_to_c_string_safe(call_details.method);
         std::string method_path_str = method_c_str ? method_c_str : "";
         if (method_c_str) {
-          RGRPC_LOG("Robust Server: Dispatching method path: " << method_path_str);
+          RGRPC_LOG_TRACE("Robust Server: Dispatching method path: " << method_path_str);
           gpr_free(method_c_str);
         } else {
-          RGRPC_LOG("Robust Server: Method path is empty in call_details!");
+          RGRPC_LOG_INFO("Robust Server: Method path is empty in call_details!");
           // This should ideally not happen if a call was accepted.
         }
         if (!client_request_payload_bb) {
-          RGRPC_LOG("Robust Server: RECV_MESSAGE op complete, but no payload buffer (client_request_payload_bb is NULL).");
+          RGRPC_LOG_INFO("Robust Server: RECV_MESSAGE op complete, but no payload buffer (client_request_payload_bb is NULL).");
           status_to_send = GRPC_STATUS_INVALID_ARGUMENT;
           status_details_cpp_str = "Client did not send a message payload as expected for unary call.";
         }  else if (r_service_handlers.containsElementNamed(method_path_str.c_str())) {
@@ -301,31 +304,31 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
           client_request_payload_bb = nullptr;
 
           try {
-            RGRPC_LOG("Robust Server: Calling R handler closure for method: " << method_path_str);
+            RGRPC_LOG_TRACE("Robust Server: Calling R handler closure for method: " << method_path_str);
             response_raw_from_r = r_handler_closure(request_raw_from_bb);
             status_to_send = GRPC_STATUS_OK;
             status_details_cpp_str = "OK";
-            RGRPC_LOG("Robust Server: R handler successful. Response length: " << response_raw_from_r.length());
+            RGRPC_LOG_TRACE("Robust Server: R handler successful. Response length: " << response_raw_from_r.length());
           } catch (Rcpp::exception& ex) {
             Rcpp::Rcerr << "[gRPC Server Error] Rcpp::exception in R handler for " << method_path_str << ": " << ex.what() << std::endl;
-            RGRPC_LOG("Robust Server: Rcpp::exception in R handler for " << method_path_str << ": " << ex.what());
+            RGRPC_LOG_TRACE("Robust Server: Rcpp::exception in R handler for " << method_path_str << ": " << ex.what());
             status_to_send = GRPC_STATUS_INTERNAL;
             status_details_cpp_str = "Error in R handler: " + std::string(ex.what());
           } catch (std::exception& ex_std) {
             Rcpp::Rcerr << "[gRPC Server Error] std::exception in R handler for " << method_path_str << ": " << ex_std.what() << std::endl;
-            RGRPC_LOG("Robust Server: std::exception in R handler for " << method_path_str << ": " << ex_std.what());
+            RGRPC_LOG_TRACE("Robust Server: std::exception in R handler for " << method_path_str << ": " << ex_std.what());
             status_to_send = GRPC_STATUS_INTERNAL;
             status_details_cpp_str = "System error in R handler: " + std::string(ex_std.what());
           } catch (...) {
             Rcpp::Rcerr << "[gRPC Server Error] Unknown exception in R handler for " << method_path_str << "." << std::endl;
-            RGRPC_LOG("Robust Server: Unknown exception in R handler for " << method_path_str);
+            RGRPC_LOG_TRACE("Robust Server: Unknown exception in R handler for " << method_path_str);
             status_to_send = GRPC_STATUS_INTERNAL;
             status_details_cpp_str = "Unknown error during R handler execution.";
           }
 
 
         } else { // Method not found in r_service_handlers
-          RGRPC_LOG("Robust Server: Method '" << method_path_str << "' not found in R handlers. Sending UNIMPLEMENTED.");
+          RGRPC_LOG_TRACE("Robust Server: Method '" << method_path_str << "' not found in R handlers. Sending UNIMPLEMENTED.");
           status_to_send = GRPC_STATUS_UNIMPLEMENTED;
           status_details_cpp_str = "Method not implemented or not found: " + method_path_str;
           if (client_request_payload_bb) { // Should have been handled above if NULL
@@ -372,7 +375,7 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
       op_s_ptr->data.send_status_from_server.status_details = &status_details_slice;
       op_s_ptr->flags = 0; op_s_ptr->reserved = NULL; op_s_ptr++;
 
-      RGRPC_LOG("Robust Server: Starting batch to SEND_RESPONSE/STATUS with tag " << TAG_SEND_SERVER_RESPONSE);
+      RGRPC_LOG_TRACE("Robust Server: Starting batch to SEND_RESPONSE/STATUS with tag " << TAG_SEND_SERVER_RESPONSE);
       grpc_call_error error_send = grpc_call_start_batch(current_call, ops_send, (size_t)(op_s_ptr - ops_send), TAG_SEND_SERVER_RESPONSE, NULL);
 
       // Unref slices used in batch *after* start_batch if they were copied.
@@ -382,14 +385,14 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
 
 
       if (error_send != GRPC_CALL_OK) {
-        RGRPC_LOG("Robust Server: Failed to start batch for SEND_RESPONSE. Error: " << error_send);
+        RGRPC_LOG_INFO("Robust Server: Failed to start batch for SEND_RESPONSE. Error: " << error_send);
         if (server_response_payload_bb) grpc_byte_buffer_destroy(server_response_payload_bb);
         // Fall through to cleanup for this call
       }
       // The completion of TAG_SEND_SERVER_RESPONSE will handle full cleanup for this call.
 
     } else if (event.tag == TAG_SEND_SERVER_RESPONSE) {
-      RGRPC_LOG("Robust Server: SEND_RESPONSE/STATUS batch complete. Success: " << event.success);
+      RGRPC_LOG_TRACE("Robust Server: SEND_RESPONSE/STATUS batch complete. Success: " << event.success);
       // Full cleanup for this call
       grpc_call_details_destroy(&call_details); // Destroy old details
       grpc_metadata_array_destroy(&request_metadata_recv); // Destroy old metadata
@@ -397,17 +400,17 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
       current_call = nullptr;
 
       // Request the next call
-      RGRPC_LOG("Robust Server: Requesting next call with tag " << TAG_REQUEST_NEW_CALL);
+      RGRPC_LOG_TRACE("Robust Server: Requesting next call with tag " << TAG_REQUEST_NEW_CALL);
       grpc_call_details_init(&call_details); // Re-init for next call
       grpc_metadata_array_init(&request_metadata_recv); // Re-init for next call
       grpc_call_error request_error = grpc_server_request_call(server, &current_call, &call_details, &request_metadata_recv, cq, cq, TAG_REQUEST_NEW_CALL);
       if (request_error != GRPC_CALL_OK) {
-        RGRPC_LOG("Robust Server: Requesting next call with tag failed! Error: " << request_error);
+        RGRPC_LOG_INFO("Robust Server: Requesting next call with tag failed! Error: " << request_error);
         // Consider stopping the server if this fails, as it can't accept calls.
         done = true;
       }
     } else {
-      RGRPC_LOG("Robust Server: Unknown or unhandled tag. Event Type: " << event.type
+      RGRPC_LOG_INFO("Robust Server: Unknown or unhandled tag. Event Type: " << event.type
                                                                         << " Tag: " << event.tag << " Success: " << event.success);
       // If event.type is GRPC_OP_COMPLETE (1), what call object was it for?
       // This is hard to know without more context or if it's an internal event.
@@ -415,11 +418,11 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
   } // end while(!done)
 
   // --- Shutdown Sequence ---
-  RGRPC_LOG("Robust Server: Shutting down server...");
+  RGRPC_LOG_INFO("Robust Server: Shutting down server...");
   if (server && cq) { // cq might be null if init failed early
-    call_r_hook(r_hooks, "shutdown");
+    call_r_hook(r_hooks, "shutdown",empty_params);
     grpc_server_shutdown_and_notify(server, cq, TAG_SERVER_SHUTDOWN);
-    RGRPC_LOG("Robust Server: Draining CQ for server shutdown event (tag " << TAG_SERVER_SHUTDOWN << ")");
+    RGRPC_LOG_TRACE("Robust Server: Draining CQ for server shutdown event (tag " << TAG_SERVER_SHUTDOWN << ")");
     // Wait for the shutdown notification
     gpr_timespec shutdown_deadline = gpr_time_add(gpr_now(GPR_CLOCK_REALTIME), gpr_time_from_seconds(5, GPR_TIMESPAN));
     grpc_event shutdown_event;
@@ -428,9 +431,9 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
     } while (shutdown_event.type != GRPC_OP_COMPLETE && shutdown_event.tag != TAG_SERVER_SHUTDOWN && shutdown_event.type != GRPC_QUEUE_TIMEOUT && shutdown_event.type != GRPC_QUEUE_SHUTDOWN);
 
     if (shutdown_event.type == GRPC_OP_COMPLETE && shutdown_event.tag == TAG_SERVER_SHUTDOWN) {
-      RGRPC_LOG("Robust Server: Server shutdown notification received.");
+      RGRPC_LOG_TRACE("Robust Server: Server shutdown notification received.");
     } else {
-      RGRPC_LOG("Robust Server: Did not get clean server shutdown event. Type: " << shutdown_event.type);
+      RGRPC_LOG_INFO("Robust Server: Did not get clean server shutdown event. Type: " << shutdown_event.type);
     }
     // Cancel any pending calls that might have been accepted after shutdown was initiated
     // but before the TAG_REQUEST_NEW_CALL handler stopped re-requesting.
@@ -438,7 +441,7 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
   }
 
   if (current_call) { // If a call was active when server loop exited
-    RGRPC_LOG("Robust Server: Cleaning up active call during shutdown.");
+    RGRPC_LOG_INFO("Robust Server: Cleaning up active call during shutdown.");
     // It's tricky to know the exact state. A simple unref might be best.
     // Or try to send a CANCELLED status if appropriate.
     // For simplicity here, just unref.
@@ -455,13 +458,13 @@ void robust_grpc_server_run( Rcpp::List r_service_handlers,      // NEW: Will be
   } // Destroy server after CQ is fully handled for it
   if (cq) {
     grpc_completion_queue_shutdown(cq); // Ensure it's shutdown
-    RGRPC_LOG("Robust Server: Draining CQ completely before destruction...");
+    RGRPC_LOG_TRACE("Robust Server: Draining CQ completely before destruction...");
     while (grpc_completion_queue_next(cq, gpr_time_0(GPR_CLOCK_REALTIME), NULL).type != GRPC_QUEUE_SHUTDOWN);
     grpc_completion_queue_destroy(cq); cq = nullptr;
   }
 
-  RGRPC_LOG("Robust Server: Shutting down gRPC library...");
+  RGRPC_LOG_TRACE("Robust Server: Shutting down gRPC library...");
   grpc_shutdown();
-  call_r_hook(r_hooks, "stopped");
-  RGRPC_LOG("Robust Server: [STOPPED]");
+  call_r_hook(r_hooks, "stopped",empty_params);
+  RGRPC_LOG_INFO("Robust Server: [STOPPED]");
 }

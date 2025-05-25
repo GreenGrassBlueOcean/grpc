@@ -34,11 +34,11 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
                                          Rcpp::RawVector r_request_payload,
                                          SEXP r_metadata_sexp = R_NilValue) { // Optional metadata
 
-  RGRPC_LOG("Robust Client: Entered function."); // Your first log
+  RGRPC_LOG_TRACE("Robust Client: Entered function."); // Your first log
 
   // --- ADD GRPC TRACERS & VERBOSITY ---
   // Best to set these before grpc_init()
-  RGRPC_LOG("Robust Client: Enabling gRPC C-core tracers (all) and debug verbosity.");
+  RGRPC_LOG_TRACE("Robust Client: Enabling gRPC C-core tracers (all) and debug verbosity.");
   // --- ADD GRPC TRACERS ---
   // To enable all tracers:
   //grpc_tracer_set_enabled("all", 1);
@@ -59,12 +59,12 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
     r_metadata = Rcpp::as<Rcpp::List>(r_metadata_sexp);
   }
 
-  RGRPC_LOG("Robust Client: Initializing gRPC core...");
+  RGRPC_LOG_TRACE("Robust Client: Initializing gRPC core...");
   grpc_init(); // Should ideally be managed globally by the R package load/unload
 
   std::string target_str = Rcpp::as<std::string>(r_target_str[0]);
   std::string method_str = Rcpp::as<std::string>(r_method_str[0]);
-  RGRPC_LOG("Robust Client: Target: " << target_str << ", Method: " << method_str);
+  RGRPC_LOG_TRACE("Robust Client: Target: " << target_str << ", Method: " << method_str);
 
   grpc_channel* channel = nullptr;
   grpc_call* call = nullptr;
@@ -104,7 +104,7 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
   cq = grpc_completion_queue_create_for_next(NULL);
   if (!cq) Rcpp::stop("Robust Client: Failed to create CQ.");
 
-  RGRPC_LOG("Robust Client: Creating insecure credentials...");
+  RGRPC_LOG_TRACE("Robust Client: Creating insecure credentials...");
   grpc_channel_credentials* creds = grpc_insecure_credentials_create();
   if (!creds) {
     grpc_completion_queue_destroy(cq);
@@ -113,7 +113,7 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
   }
 
   grpc_channel_args channel_args = {0, NULL};
-  RGRPC_LOG("Robust Client: Creating channel using grpc_channel_create...");
+  RGRPC_LOG_TRACE("Robust Client: Creating channel using grpc_channel_create...");
   channel = grpc_channel_create(target_str.c_str(), creds, &channel_args);
   grpc_channel_credentials_release(creds); // Released once channel takes ownership or copies
 
@@ -122,12 +122,12 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
     grpc_shutdown();
     Rcpp::stop("Robust Client: grpc_channel_create returned NULL.");
   }
-  RGRPC_LOG("Robust Client: Channel pointer: " << channel);
+  RGRPC_LOG_TRACE("Robust Client: Channel pointer: " << channel);
 
   gpr_timespec call_deadline = gpr_time_add(gpr_now(GPR_CLOCK_REALTIME), gpr_time_from_seconds(15, GPR_TIMESPAN));
   grpc_slice method_slice_grpc = grpc_slice_from_copied_string(method_str.c_str());
 
-  RGRPC_LOG("Robust Client: Creating call...");
+  RGRPC_LOG_TRACE("Robust Client: Creating call...");
   call = grpc_channel_create_call(channel, NULL, GRPC_PROPAGATE_DEFAULTS, cq,
                                   method_slice_grpc, NULL /* host_slice, can be target_str too */, call_deadline, NULL);
   grpc_slice_unref(method_slice_grpc); // Call has a ref now
@@ -137,7 +137,7 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
     grpc_shutdown();
     Rcpp::stop("Robust Client: grpc_channel_create_call returned NULL.");
   }
-  RGRPC_LOG("Robust Client: Call created: " << call);
+  RGRPC_LOG_TRACE("Robust Client: Call created: " << call);
 
   grpc_op ops[6];
   memset(ops, 0, sizeof(ops));
@@ -174,22 +174,22 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
   op_ptr->data.recv_status_on_client.status_details = &details_slice_recv;
   op_ptr->flags = 0; op_ptr->reserved = NULL; op_ptr++;
 
-  RGRPC_LOG("Robust Client: Starting batch (" << (size_t)(op_ptr - ops) << " ops) with tag 1...");
+  RGRPC_LOG_TRACE("Robust Client: Starting batch (" << (size_t)(op_ptr - ops) << " ops) with tag 1...");
   grpc_call_error error = grpc_call_start_batch(call, ops, (size_t)(op_ptr - ops), tag(1), NULL);
 
   std::string error_detail_str = "RPC failed.";
   if (error != GRPC_CALL_OK) {
     error_detail_str = "Robust Client: grpc_call_start_batch failed with error: " + std::to_string(error);
-    RGRPC_LOG(error_detail_str);
+    RGRPC_LOG_INFO(error_detail_str);
     // Go to cleanup
   } else {
-    RGRPC_LOG("Robust Client: Waiting for batch completion (tag 1)...");
+    RGRPC_LOG_TRACE("Robust Client: Waiting for batch completion (tag 1)...");
     grpc_event event = grpc_completion_queue_next(cq, call_deadline, NULL); // Use call_deadline or another appropriate one
-    RGRPC_LOG("Robust Client: Batch event: Type=" << event.type << " Tag=" << reinterpret_cast<intptr_t>(event.tag) << " Success=" << event.success);
+    RGRPC_LOG_TRACE("Robust Client: Batch event: Type=" << event.type << " Tag=" << reinterpret_cast<intptr_t>(event.tag) << " Success=" << event.success);
 
     if (event.type == GRPC_OP_COMPLETE) {
       if (event.success) {
-        RGRPC_LOG("Robust Client: RPC batch successful. Status from server: " << status_code_recv);
+        RGRPC_LOG_TRACE("Robust Client: RPC batch successful. Status from server: " << status_code_recv);
         if (status_code_recv == GRPC_STATUS_OK) {
           if (response_bb) {
             grpc_byte_buffer_reader bbr;
@@ -197,20 +197,20 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
             grpc_slice resp_slice = grpc_byte_buffer_reader_readall(&bbr);
             result_rawvector = sliceToRawVector(resp_slice);
 
-            RGRPC_LOG("Robust Client: Prepared result_rawvector. Length: " << result_rawvector.size());
+            RGRPC_LOG_TRACE("Robust Client: Prepared result_rawvector. Length: " << result_rawvector.size());
             if (result_rawvector.size() > 0 && result_rawvector.size() < 50) { // Log a few bytes
               std::ostringstream oss;
               for (int k=0; k < result_rawvector.size() && k < 10; ++k) {
                 oss << std::hex << static_cast<int>(result_rawvector[k]) << " ";
               }
-              RGRPC_LOG("Robust Client: result_rawvector (first 10 bytes hex): " << oss.str());
+              RGRPC_LOG_TRACE("Robust Client: result_rawvector (first 10 bytes hex): " << oss.str());
             }
 
 
             grpc_slice_unref(resp_slice);
             // grpc_byte_buffer_reader_destroy(&bbr); // Not needed for simple readall
           } else {
-            RGRPC_LOG("Robust Client: Status OK, but no response payload received.");
+            RGRPC_LOG_TRACE("Robust Client: Status OK, but no response payload received.");
             // This can happen for server streaming responses where client closes early,
             // or if server sends OK but no message (valid for some RPCs).
           }
@@ -218,7 +218,7 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
           char* ds = grpc_slice_to_c_string(details_slice_recv);
           error_detail_str = "RPC failed with server status " + std::to_string(status_code_recv) + ": " + ds;
           gpr_free(ds);
-          RGRPC_LOG(error_detail_str);
+          RGRPC_LOG_INFO(error_detail_str);
         }
       } else { // event.success == 0, batch failed (e.g., network error, server crash, client cancellation)
         error_detail_str = "RPC batch failed (event.success=0). Final status from server (if any): " + std::to_string(status_code_recv);
@@ -227,20 +227,20 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
           error_detail_str += ". Details: " + std::string(ds);
           gpr_free(ds);
         }
-        RGRPC_LOG(error_detail_str);
+        RGRPC_LOG_INFO(error_detail_str);
         // status_code_recv might contain more info, e.g. GRPC_STATUS_CANCELLED
       }
     } else if (event.type == GRPC_QUEUE_TIMEOUT) {
       error_detail_str = "Robust Client: Call timed out waiting for completion queue.";
-      RGRPC_LOG(error_detail_str);
+      RGRPC_LOG_INFO(error_detail_str);
       grpc_call_cancel_with_status(call, GRPC_STATUS_CANCELLED, "Client cancelled due to timeout", NULL);
     } else { // GRPC_QUEUE_SHUTDOWN or other unexpected event
       error_detail_str = "Robust Client: Unexpected event type from CQ: " + std::to_string(event.type);
-      RGRPC_LOG(error_detail_str);
+      RGRPC_LOG_INFO(error_detail_str);
     }
   }
 
-  RGRPC_LOG("Robust Client: Cleaning up...");
+  RGRPC_LOG_TRACE("Robust Client: Cleaning up...");
   if (request_bb) {
     grpc_byte_buffer_destroy(request_bb);
     request_bb = nullptr;
@@ -252,55 +252,55 @@ Rcpp::RawVector robust_grpc_client_call( Rcpp::CharacterVector r_target_str,
   grpc_slice_unref(details_slice_recv);
 
   // Unref metadata slices from metadata_store if it was populated
-  RGRPC_LOG("Robust Client: Unreffing metadata_store slices (if any)...");
+  RGRPC_LOG_TRACE("Robust Client: Unreffing metadata_store slices (if any)...");
   for (const auto& meta : metadata_store) {
     // These slices were created with grpc_slice_from_copied_string
     grpc_slice_unref(meta.key);
     grpc_slice_unref(meta.value);
   }
-  RGRPC_LOG("Robust Client: metadata_store slices unreffed.");
+  RGRPC_LOG_TRACE("Robust Client: metadata_store slices unreffed.");
 
   // THE FIX: Reset initial_metadata_send before destroying its struct
-  RGRPC_LOG("Robust Client: Resetting initial_metadata_send before destroy.");
+  RGRPC_LOG_TRACE("Robust Client: Resetting initial_metadata_send before destroy.");
   initial_metadata_send.metadata = nullptr;
   initial_metadata_send.count = 0;
   initial_metadata_send.capacity = 0;
 
-  RGRPC_LOG("Robust Client: Destroying initial_metadata_send array struct...");
+  RGRPC_LOG_TRACE("Robust Client: Destroying initial_metadata_send array struct...");
   grpc_metadata_array_destroy(&initial_metadata_send);
-  RGRPC_LOG("Robust Client: initial_metadata_send array struct destroyed.");
+  RGRPC_LOG_TRACE("Robust Client: initial_metadata_send array struct destroyed.");
 
-  RGRPC_LOG("Robust Client: Destroying initial_metadata_recv array...");
+  RGRPC_LOG_TRACE("Robust Client: Destroying initial_metadata_recv array...");
   grpc_metadata_array_destroy(&initial_metadata_recv);
-  RGRPC_LOG("Robust Client: initial_metadata_recv array destroyed.");
+  RGRPC_LOG_TRACE("Robust Client: initial_metadata_recv array destroyed.");
 
-  RGRPC_LOG("Robust Client: Destroying trailing_metadata_recv array...");
+  RGRPC_LOG_TRACE("Robust Client: Destroying trailing_metadata_recv array...");
   grpc_metadata_array_destroy(&trailing_metadata_recv);
-  RGRPC_LOG("Robust Client: trailing_metadata_recv array destroyed.");
+  RGRPC_LOG_TRACE("Robust Client: trailing_metadata_recv array destroyed.");
 
-  RGRPC_LOG("Robust Client: Unreffing call...");
+  RGRPC_LOG_TRACE("Robust Client: Unreffing call...");
   if (call) {
     grpc_call_unref(call);
     call = nullptr;
   }
-  RGRPC_LOG("Robust Client: Destroying channel...");
+  RGRPC_LOG_TRACE("Robust Client: Destroying channel...");
   if (channel) {
     grpc_channel_destroy(channel);
     channel = nullptr;
   }
 
-  RGRPC_LOG("Robust Client: Cleaning up CQ...");
+  RGRPC_LOG_TRACE("Robust Client: Cleaning up CQ...");
   if (cq) {
     grpc_completion_queue_shutdown(cq);
     while (grpc_completion_queue_next(cq, gpr_time_0(GPR_CLOCK_REALTIME), NULL).type != GRPC_QUEUE_SHUTDOWN);
     grpc_completion_queue_destroy(cq);
     cq = nullptr;
   }
-  RGRPC_LOG("Robust Client: CQ cleaned up.");
+  RGRPC_LOG_TRACE("Robust Client: CQ cleaned up.");
 
-  RGRPC_LOG("Robust Client: Calling grpc_shutdown().");
+  RGRPC_LOG_TRACE("Robust Client: Calling grpc_shutdown().");
   grpc_shutdown();
-  RGRPC_LOG("Robust Client: Fetch function complete.");
+  RGRPC_LOG_INFO("Robust Client: Fetch function complete.");
 
   if (status_code_recv != GRPC_STATUS_OK) { // Removed result_rawvector.length() check for now, Rcpp::stop handles empty
     Rcpp::stop(error_detail_str); // error_detail_str should be populated if not OK

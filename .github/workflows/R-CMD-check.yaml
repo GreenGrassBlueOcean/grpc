@@ -1,0 +1,160 @@
+# .github/workflows/R-CMD-check.yaml
+# Combines usethis::use_github_action_check_standard() base
+# with custom system dependency installation for the grpc package.
+
+name: R-CMD-check
+
+on:
+  push:
+    branches: [main, master] # Adjust to your primary branch name
+  pull_request:
+    branches: [main, master] # Adjust to your primary branch name
+
+# Ensure GITHUB_TOKEN has appropriate permissions if you need to interact
+# with other repos or specific GitHub features. 'read-all' is a safe default.
+permissions: read-all
+
+jobs:
+  R-CMD-check:
+    runs-on: ${{ matrix.config.os }}
+    name: ${{ matrix.config.os }} (R ${{ matrix.config.r }})
+    strategy:
+      fail-fast: false
+      matrix:
+        config:
+          # Using ubuntu-24.04 specifically as requested
+          - {os: ubuntu-24.04,   r: 'release'}
+          - {os: ubuntu-24.04,   r: 'devel', http-user-agent: 'release'} # http-user-agent often used for devel builds
+          - {os: ubuntu-24.04,   r: 'oldrel-1'}
+          - {os: windows-latest, r: 'release'}
+          - {os: macos-latest,   r: 'release'}
+          # Add other R versions or OS variants as needed
+
+    env:
+      GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }} # For package installations from GitHub if needed
+      R_KEEP_PKG_SOURCE: yes # Good for debugging check failures
+      # RTOOLS_VERSION_NUM: "45" # Only if explicitly needed by Makevars.win/configure
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Optional: If your vignettes require pandoc
+      - uses: r-lib/actions/setup-pandoc@v2
+
+      - name: Set script permissions (Unix-like OS)
+        if: runner.os != 'Windows'
+        run: |
+          if [ -f configure ]; then chmod +x configure; fi
+          if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
+          # If you need to run autoconf before R CMD build/install (usually not necessary for just a configure script)
+          # if [ -f configure.ac ]; then
+          #   echo "Running aclocal and autoconf..."
+          #   aclocal -I m4 --install || true # -I m4 if you have custom macros in a 'm4' subdir
+          #   autoconf || true
+          # fi
+
+      # --------------------------------------------------------------------
+      # System Dependencies Installation (BEFORE setup-r-dependencies or check-r-package)
+      # --------------------------------------------------------------------
+      - name: Install system dependencies (Linux - Ubuntu 24.04)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            autoconf \
+            autoconf-archive \
+            pkg-config \
+            libgrpc-dev libgrpc++-dev \
+            protobuf-compiler libprotobuf-dev
+          # Optional: sudo apt-get install -y libabsl-dev
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        run: |
+          pacman -Syu --noconfirm
+          pacman -Syu --noconfirm
+          pacman -Su --noconfirm
+
+          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-pkg-config \
+                                      mingw-w64-ucrt-x86_64-make
+
+          echo "Installing gRPC and Protobuf for UCRT64 via pacman..."
+          pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
+
+          echo "Installed MSYS2 packages. Verifying critical tools in UCRT64 env:"
+          echo "which pkg-config:"
+          which pkg-config || echo "pkg-config not found in MSYS2 PATH"
+          echo "which make:"
+          which make || echo "make not found in MSYS2 PATH"
+          echo "which g++:"
+          which g++ || echo "g++ not found in MSYS2 PATH"
+
+      # --------------------------------------------------------------------
+      # R Setup and Package Check
+      # --------------------------------------------------------------------
+      - uses: r-lib/actions/setup-r@v2
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }} # Handles the 'release' for devel build
+          use-public-rspm: true
+
+      - uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          extra-packages: | # Ensures rcmdcheck is available
+            any::rcmdcheck
+            any::sessioninfo # Good for debugging output
+          needs: check # Installs dependencies needed for checking the package
+
+      - name: Session Info (Post R setup and Dep Install)
+        shell: Rscript {0}
+        run: |
+          options(width = 100)
+          pkgs <- installed.packages()[, "Version"]
+          sessioninfo::session_info(pkgs, include_base = TRUE)
+
+      # check-r-package action will:
+      # 1. Run R CMD build
+      # 2. Run R CMD check on the built tarball
+      # It uses rcmdcheck::rcmdcheck internally.
+      # R CMD build/INSTALL will run your ./configure script on Unix-like systems.
+      # On Windows, it will use src/Makevars.win.
+      - uses: r-lib/actions/check-r-package@v2
+        with:
+          upload-snapshots: true # Useful for r-lib, can be true or false for you
+          # build_args are passed to R CMD build
+          build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
+          # args are passed to R CMD check (via rcmdcheck)
+          args: 'c("--no-manual", "--as-cran")'
+          error_on: 'warning' # Fail the job if R CMD check produces warnings
+          check_dir: 'check' # Directory for check results
+
+      # Optional: Explicitly show check summary (00check.log) if check-r-package doesn't make it obvious enough on failure
+      - name: Show check summary from 00check.log
+        if: failure() # Only run if the check-r-package step fails
+        shell: Rscript {0}
+        run: |
+          check_log_path <- Sys.glob(file.path("check", "*.Rcheck", "00check.log"))
+          if (length(check_log_path) > 0 && file.exists(check_log_path[1])) {
+            cat("\n--- Start of 00check.log ---\n")
+            writeLines(readLines(check_log_path[1]))
+            cat("\n--- End of 00check.log ---\n")
+          } else {
+            message("00check.log not found or check directory structure unexpected.")
+          }
+
+      # Upload check results (already part of check-r-package if snapshots are on, but explicit for clarity)
+      # This is redundant if check-r-package with upload-snapshots: true handles artifacts as you need.
+      # If you want the full check directory on failure regardless of snapshots:
+      - name: Upload full check results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-r${{ matrix.config.r }}-check-results
+          path: check # Uploads the entire 'check' directory created by check-r-package

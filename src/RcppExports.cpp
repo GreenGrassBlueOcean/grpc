@@ -10,20 +10,6 @@ Rcpp::Rostream<true>&  Rcpp::Rcout = Rcpp::Rcpp_cout_get();
 Rcpp::Rostream<false>& Rcpp::Rcerr = Rcpp::Rcpp_cerr_get();
 #endif
 
-// fetch
-RawVector fetch(CharacterVector server, CharacterVector method, RawVector requestArg, CharacterVector metadata);
-RcppExport SEXP _grpc_fetch(SEXP serverSEXP, SEXP methodSEXP, SEXP requestArgSEXP, SEXP metadataSEXP) {
-BEGIN_RCPP
-    Rcpp::RObject rcpp_result_gen;
-    Rcpp::RNGScope rcpp_rngScope_gen;
-    Rcpp::traits::input_parameter< CharacterVector >::type server(serverSEXP);
-    Rcpp::traits::input_parameter< CharacterVector >::type method(methodSEXP);
-    Rcpp::traits::input_parameter< RawVector >::type requestArg(requestArgSEXP);
-    Rcpp::traits::input_parameter< CharacterVector >::type metadata(metadataSEXP);
-    rcpp_result_gen = Rcpp::wrap(fetch(server, method, requestArg, metadata));
-    return rcpp_result_gen;
-END_RCPP
-}
 // robust_grpc_client_call
 Rcpp::RawVector robust_grpc_client_call(Rcpp::CharacterVector r_target_str, Rcpp::CharacterVector r_method_str, Rcpp::RawVector r_request_payload, SEXP r_metadata_sexp);
 RcppExport SEXP _grpc_robust_grpc_client_call(SEXP r_target_strSEXP, SEXP r_method_strSEXP, SEXP r_request_payloadSEXP, SEXP r_metadata_sexpSEXP) {
@@ -35,6 +21,26 @@ BEGIN_RCPP
     Rcpp::traits::input_parameter< Rcpp::RawVector >::type r_request_payload(r_request_payloadSEXP);
     Rcpp::traits::input_parameter< SEXP >::type r_metadata_sexp(r_metadata_sexpSEXP);
     rcpp_result_gen = Rcpp::wrap(robust_grpc_client_call(r_target_str, r_method_str, r_request_payload, r_metadata_sexp));
+    return rcpp_result_gen;
+END_RCPP
+}
+// rgrpc_set_log_level
+void rgrpc_set_log_level(int level);
+RcppExport SEXP _grpc_rgrpc_set_log_level(SEXP levelSEXP) {
+BEGIN_RCPP
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    Rcpp::traits::input_parameter< int >::type level(levelSEXP);
+    rgrpc_set_log_level(level);
+    return R_NilValue;
+END_RCPP
+}
+// rgrpc_get_log_level
+int rgrpc_get_log_level();
+RcppExport SEXP _grpc_rgrpc_get_log_level() {
+BEGIN_RCPP
+    Rcpp::RObject rcpp_result_gen;
+    Rcpp::RNGScope rcpp_rngScope_gen;
+    rcpp_result_gen = Rcpp::wrap(rgrpc_get_log_level());
     return rcpp_result_gen;
 END_RCPP
 }
@@ -64,8 +70,9 @@ END_RCPP
 }
 
 static const R_CallMethodDef CallEntries[] = {
-    {"_grpc_fetch", (DL_FUNC) &_grpc_fetch, 4},
     {"_grpc_robust_grpc_client_call", (DL_FUNC) &_grpc_robust_grpc_client_call, 4},
+    {"_grpc_rgrpc_set_log_level", (DL_FUNC) &_grpc_rgrpc_set_log_level, 1},
+    {"_grpc_rgrpc_get_log_level", (DL_FUNC) &_grpc_rgrpc_get_log_level, 0},
     {"_grpc_minimal_start_server_test", (DL_FUNC) &_grpc_minimal_start_server_test, 1},
     {"_grpc_robust_grpc_server_run", (DL_FUNC) &_grpc_robust_grpc_server_run, 4},
     {NULL, NULL, 0}

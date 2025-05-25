@@ -115,108 +115,76 @@ start_server <- function(impl, channel, hooks = grpc_default_hooks(), duration_s
   invisible(NULL)
 }
 
-# Your newResponse function (ensure it's also in an R file in your package, e.g., R/utils.R or R/server.R)
+#' Construct a Response Message Object for a gRPC Service Handler
+#'
+#' This is a helper function designed to be called from within user-defined
+#' R functions that handle gRPC service method calls. It uses attributes
+#' (specifically `ResponseTypeDescriptor`) attached to the handler function
+#' by `start_server` to automatically determine the correct RProtoBuf message
+#' type for the response.
+#'
+#' @param ... Arguments to be passed to `RProtoBuf::new()` to populate the fields
+#'   of the response message. These should match the fields defined in your
+#'   `.proto` file for the response message type.
+#' @param WFUN (Advanced Usage) The calling R handler function. This defaults to
+#'   the parent frame's function (`sys.function(sys.parent())`), which is
+#'   typically the user's gRPC service handler function (e.g., their `SayHello`
+#'   implementation) as wrapped by `start_server`. This argument allows
+#'   `newResponse` to find the `ResponseTypeDescriptor` attribute. It's
+#'   generally not necessary for users to set this argument manually.
+#'
+#' @return An RProtoBuf message object of the type expected for the response of
+#'   the calling gRPC service handler.
+#'
+#' @importFrom RProtoBuf new
 #' @importFrom methods is
 #' @export
-newResponse <- function(..., WFUN = sys.function(sys.parent())) { # Corrected default
+#' @seealso \code{\link{start_server}}
+#' @examples
+#' \dontrun{
+#' # This function is typically used inside a service handler function.
+#' # Assume 'MyResponse' is the RProtoBuf message type for the response,
+#' # and 'start_server' has correctly attributed the handler.
+#'
+#' # Example handler for a service method:
+#' my_service_handler <- function(request) {
+#'   # ... process request ...
+#'   response_message_text <- paste("Responding to:", request$name)
+#'
+#'   # Use newResponse to create the response message object.
+#'   # 'message' here is assumed to be a field in 'MyResponse.proto'.
+#'   newResponse(message = response_message_text, other_field = 123)
+#' }
+#'
+#' # The 'impl' structure for start_server would look like:
+#' # service_impl <- list(
+#' #   MyMethod = list(
+#' #     RequestType = P(MyRequest),  # RProtoBuf Descriptor for request
+#' #     ResponseType = P(MyResponse), # RProtoBuf Descriptor for response
+#' #     f = my_service_handler
+#' #   )
+#' # )
+#' #
+#' # When 'my_service_handler' is called by the gRPC server framework (via start_server),
+#' # 'newResponse()' will correctly use P(MyResponse) to create the new message.
+#' }
+newResponse <- function(..., WFUN = sys.function(sys.parent())) {
   # WFUN now correctly defaults to the function that *called* newResponse
+  # (which, in the server context, is the f_with_attrs wrapper created in start_server)
   response_descriptor <- attr(WFUN, "ResponseTypeDescriptor")
-  if (is.null(response_descriptor) || !is(response_descriptor, "Descriptor")) {
-    stop(paste0("newResponse: Calling function WFUN (", deparse(substitute(WFUN)),") is missing a valid ResponseTypeDescriptor attribute, or it's not a 'Descriptor' object."))
+
+  if (is.null(response_descriptor)) {
+    stop(paste0("newResponse: The calling function (", deparse(substitute(WFUN)),
+                ") is missing the 'ResponseTypeDescriptor' attribute. ",
+                "This attribute is normally set by 'start_server' on your handler function. ",
+                "Ensure you are calling newResponse from within a gRPC handler function ",
+                "managed by 'start_server'."))
   }
+  if (!is(response_descriptor, "Descriptor")) {
+    stop(paste0("newResponse: The 'ResponseTypeDescriptor' attribute on function '",
+                deparse(substitute(WFUN)), "' is not a valid RProtoBuf 'Descriptor' object. ",
+                "Current class: ", paste(class(response_descriptor), collapse=", ")))
+  }
+
   RProtoBuf::new(response_descriptor, ...)
-}
-
-# Your grpc_default_hooks function (if not defined elsewhere)
-#' @export
-grpc_default_hooks <- function() {
-  list()
-}
-
-# start_server <- function(impl, channel, hooks = grpc_default_hooks(), duration_seconds = 30) {
-#
-#   if (!is.null(hooks$exit) && is.function(hooks$exit)) {
-#     on.exit(hooks$exit())
-#   }
-#
-#   # This section prepares server_functions. It's not used by the current C++ server,
-#   # but let's make it syntactically correct.
-#   if (!is.null(impl) && length(impl) > 0) {
-#     server_functions <- lapply(impl, function(fn_spec) {
-#       # fn_spec is something like:
-#       # list(RequestType = P("pkg.Msg1"), ResponseType = P("pkg.Msg2"), f = some_r_func)
-#
-#       req_desc <- fn_spec[["RequestType"]]
-#       res_desc <- fn_spec[["ResponseType"]]
-#       r_handler_func <- fn_spec[["f"]]
-#
-#       if (!is(req_desc, "Descriptor")) { # Use is() and check for "Descriptor"
-#         stop(paste("Invalid RequestType. Expected class 'Descriptor', got '", paste(class(req_desc), collapse=", "), "'", sep=""))
-#       }
-#       if (!is(res_desc, "Descriptor")) { # Use is() and check for "Descriptor"
-#         stop(paste("Invalid ResponseType. Expected class 'Descriptor', got '", paste(class(res_desc), collapse=", "), "'", sep=""))
-#       }
-#       if (!is.function(r_handler_func)) stop("Handler 'f' is not a function")
-#
-#       # Store descriptors as attributes of the handler function 'f'
-#       # This is a common pattern for the R handler to know its types.
-#       f_with_attrs <- structure(r_handler_func,
-#                                 RequestType  = req_desc,
-#                                 ResponseType = res_desc)
-#
-#       # This closure is what C++ would invoke if it were calling R handlers.
-#       # It handles serialization/deserialization.
-#       function(request_bytes_from_cpp) {
-#         request_msg <- RProtoBuf::read(req_desc, request_bytes_from_cpp)
-#         response_msg <- f_with_attrs(request_msg) # Call the user's R function
-#         RProtoBuf::serialize(response_msg, NULL)
-#       }
-#     })
-#     names(server_functions) <- names(impl) # Use simple names like "SayHello"
-#   } else {
-#     server_functions <- list()
-#   }
-#
-#   flog.info("R start_server: Calling C++ robust_grpc_server_run for %d seconds on channel %s",
-#             duration_seconds, channel)
-#
-#   robust_grpc_server_run(channel, duration_seconds) # C++ server doesn't use server_functions or hooks yet
-#
-#   flog.info("R start_server: robust_grpc_server_run returned.")
-#   invisible(NULL)
-# }
-# start_server <- function(impl, channel, hooks = grpc_default_hooks()) {
-#
-#   if (!is.null(hooks$exit) & is.function(hooks$exit)) {
-#     on.exit(hooks$exit())
-#   }
-#
-#   server_functions <- lapply(impl, function(fn){
-#     descriptor <- P(fn[["RequestType"]]$proto)
-#
-#     f <- structure(fn$f,
-#                    RequestType  = fn[["RequestType"]],
-#                    ResponseType = fn[["ResponseType"]])
-#
-#     function(x) serialize(f(read(descriptor, x)), NULL)
-#   })
-#
-#   names(server_functions) <- vapply(impl, function(x)x$name, NA_character_)
-#
-#   #run(server_functions, channel, hooks)
-#   robust_grpc_server_run(channel, 30) # Or some other duration
-#   invisible(NULL)
-# }
-
-
-#' Construct a new ProtoBuf of ResponseType
-#'
-#' @param ... threaded through to the ProtoBuf constructor
-#' @param WFUN A GRPC service method with RequestType and ResponseType attributes
-#' @return Called for side effects (starts the server). Returns `NULL` invisibly.
-#'
-#' @export
-#' @importFrom RProtoBuf P new
-newResponse <- function(..., WFUN=sys.function(-1)){
-  new(P(attr(WFUN, "ResponseType")$proto), ...)
 }
