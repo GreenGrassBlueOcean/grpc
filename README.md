@@ -1,3 +1,7 @@
+<!-- badges: start -->
+[![R-CMD-check](https://github.com/GreenGrassBlueOcean/grpc/actions/workflows/R-CMD-check.yaml/badge.svg)](https://github.com/GreenGrassBlueOcean/grpc/actions/workflows/R-CMD-check.yaml)
+<!-- badges: end -->
+
 # grpc: An R Interface to gRPC
 
 This R library provides an interface to [gRPC](https://grpc.io/), a high-performance, open-source universal Remote Procedure Call (RPC) framework. It enables the creation of gRPC clients and servers within R, facilitating communication with distributed services.
