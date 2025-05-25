@@ -76,25 +76,32 @@ jobs:
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
-        shell: msys2 {0}
+        # Corrected shell invocation:
+        shell: ${{ env.RTOOLS_SHELL }} /usr/bin/bash -eo pipefail {0}
+        env:
+          CHERE_INVOKING: "true" # Important for path handling with this shell invocation
         run: |
+          echo "Running pacman updates in MSYS2 (UCRT64 for R >= 4.2)..."
           pacman -Syu --noconfirm
-          pacman -Syu --noconfirm
-          pacman -Su --noconfirm
+          pacman -Syu --noconfirm # MSYS2 often needs a double update for core components
+          pacman -Su --noconfirm  # Update all installed packages
 
+          echo "Installing core build tools (pkg-config, make) if needed..."
+          # The toolchain (gcc, g++) should be part of the Rtools setup already.
           pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-pkg-config \
                                       mingw-w64-ucrt-x86_64-make
 
           echo "Installing gRPC and Protobuf for UCRT64 via pacman..."
           pacman -S --needed --noconfirm mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
 
-          echo "Installed MSYS2 packages. Verifying critical tools in UCRT64 env:"
+          echo "--- Verification: Check if tools are found in the MSYS2 PATH ---"
           echo "which pkg-config:"
-          which pkg-config || echo "pkg-config not found in MSYS2 PATH"
+          which pkg-config || { echo "ERROR: pkg-config NOT FOUND after install. Check pacman step and MSYS2 PATH."; exit 1; }
           echo "which make:"
-          which make || echo "make not found in MSYS2 PATH"
+          which make || { echo "ERROR: make NOT FOUND after install. Check pacman step and MSYS2 PATH."; exit 1; }
           echo "which g++:"
-          which g++ || echo "g++ not found in MSYS2 PATH"
+          which g++ || { echo "ERROR: g++ NOT FOUND. Ensure Rtools setup by setup-r is complete."; exit 1; }
+          echo "--- End Verification ---"
 
       # --------------------------------------------------------------------
       # R Setup and Package Check
@@ -111,6 +118,7 @@ jobs:
             any::rcmdcheck
             any::sessioninfo # Good for debugging output
           needs: check # Installs dependencies needed for checking the package
+          cache-enabled: false
 
       - name: Session Info (Post R setup and Dep Install)
         shell: Rscript {0}

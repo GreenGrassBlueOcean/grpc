@@ -1,9 +1,9 @@
 Package: grpc
 Type: Package
 Title: gRPC Library
-Version: 0.2.0
-Author: Neal Fultz, Google
-Maintainer: Neal Fultz <nfultz@gmail.com>
+Version: 0.2.1
+Author: Laurens van der Burg ,Neal Fultz, Google
+Maintainer: laurens van der Burg <laurens@email.com>
 Description: Provides R bindings for the gRPC framework (https://grpc.io/), 
     allowing the creation of gRPC clients and servers within R. Includes 
     functions for reading protocol buffer service definitions and generating 
