@@ -99,8 +99,6 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          # Removed 'needs: check' which was invalid here
-          cache-enabled: false # For debugging pak error, re-enable later by removing or setting to true
 
       # Show Session Info
       - name: Show R Session Info
@@ -110,6 +108,9 @@ jobs:
           pkgs <- installed.packages()[, "Version"]
           sessioninfo::session_info(pkgs, include_base = TRUE)
 
+      - name: Ensure Check Directory Exists
+        run: mkdir -p check
+
       # Run R CMD Check
       # No need to 'mkdir -p check'; check-r-package handles the check_dir.
       - name: Check R package
@@ -118,8 +119,9 @@ jobs:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          error-on: 'warning' # Keep as warning for now, can change to 'error' if too many CI passes with warnings
-          check-dir: 'check'
+          error-on: 'warning'
+
+       # check-dir: 'check'
 
       # Attempt to clean up known problematic temp files on Windows if check fails
       - name: Cleanup potentially locked temp files (Windows)
