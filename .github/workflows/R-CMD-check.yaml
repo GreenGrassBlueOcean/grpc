@@ -60,36 +60,36 @@ jobs:
       - name: Find gRPC C-core headers and verify pkg-config (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "--- Locating 'grpc/grpc.h' (a key C-core header) ---"
-          # This find command looks for the file 'grpc.h' inside any directory named 'grpc' under /usr
-          GRPC_CORE_HEADER_PATH=$(sudo find /usr -type f -path '*/grpc/grpc.h' -print -quit)
-          if [ -n "$GRPC_CORE_HEADER_PATH" ]; then
-            echo "Found grpc.h at: $GRPC_CORE_HEADER_PATH"
-            # Extract the directory that should be added to -I
-            # e.g., if found at /usr/include/some-grpc-subdir/grpc/grpc.h, we want -I/usr/include/some-grpc-subdir
-            GRPC_C_INCLUDE_DIR=$(dirname "$GRPC_CORE_HEADER_PATH" | sed 's|/grpc$||')
-            echo "Deduced C-core include directory for -I: $GRPC_C_INCLUDE_DIR"
-            echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
+          echo "--- Listing contents of /usr/include/grpc (if it exists) ---"
+          ls -R /usr/include/grpc || echo "/usr/include/grpc directory not found or ls failed"
+
+          echo "--- Searching for 'credentials.h' within any 'grpc' subdirectory under /usr/include ---"
+          # This will find any path like /usr/include/.../grpc/credentials.h
+          FOUND_PATH=$(sudo find /usr/include -type f -path '*/grpc/credentials.h' -print -quit)
+
+          if [ -n "$FOUND_PATH" ]; then
+            echo "Found C-core credentials.h at: $FOUND_PATH"
+            # The include path needed is the directory *containing* the 'grpc' directory
+            # e.g., if path is /usr/include/abc/grpc/credentials.h, we need -I/usr/include/abc
+            VERIFIED_GRPC_C_INCLUDE_DIR=$(dirname "$FOUND_PATH" | sed 's|/grpc$||')
+            echo "Deduced C-core include directory for -I: $VERIFIED_GRPC_C_INCLUDE_DIR"
+            echo "VERIFIED_GRPC_C_INCLUDE_DIR=${VERIFIED_GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
           else
-            echo "ERROR: grpc/grpc.h (C-core header) not found under /usr. Installation might be incomplete or in an unexpected location."
-            # List contents of likely include directories for further manual inspection
-            echo "Listing /usr/include/ ..."
-            ls -A /usr/include || true
-            echo "Listing /usr/local/include/ ..."
-            ls -A /usr/local/include || true
+            echo "ERROR: C-core 'grpc/credentials.h' NOT FOUND under /usr/include."
+            echo "Listing all 'credentials.h' under /usr for inspection:"
+            sudo find /usr -name credentials.h || echo "No credentials.h found anywhere under /usr"
             exit 1 # Fail the job if we can't find the core header
           fi
 
           echo "--- Verifying pkg-config for grpc++ ---"
+          # ... (rest of pkg-config checks as before) ...
           pkg-config --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
           echo "grpc++ CFLAGS: $(pkg-config --cflags grpc++)"
           echo "grpc++ LIBS: $(pkg-config --libs grpc++)"
-
           echo "--- Verifying pkg-config for grpc (C-core, if .pc file exists) ---"
           pkg-config --modversion grpc || echo "WARNING: pkg-config cannot find grpc (C-core)"
           echo "grpc CFLAGS: $(pkg-config --cflags grpc)"
           echo "grpc LIBS: $(pkg-config --libs grpc)"
-
           echo "--- Verifying pkg-config for protobuf ---"
           pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
           echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
