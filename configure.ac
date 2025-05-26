@@ -14,15 +14,14 @@ AC_PROG_MAKE_SET     # Check for 'make' and ensure $(MAKE) is set
 # This macro will add necessary compiler flags (like -std=c++17) to CXX if needed.
 AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory])
 # For src/Makevars.in, R's system uses CXX_STD = CXX17, which is fine.
-# If you wanted to pass the exact flags AX_CXX_COMPILE_STDCXX added, it's more complex.
-# For now, relying on R's CXX_STD = CXX17 mechanism is simpler.
 
-# Check for pkg-config tool 
+# Check for pkg-config tool
 PKG_PROG_PKG_CONFIG([0.28]) # Minimum version 0.28 recommended
 
 # Check for the grpc++ and protobuf libraries using pkg-config
+# These are the primary dependencies for the C++ parts of the package.
 PKG_CHECK_MODULES([GRPC_DEPS], [grpc++ protobuf], [
-    AC_MSG_NOTICE([Found grpc++ and protobuf via pkg-config.])
+    AC_MSG_NOTICE([Found dependent libraries (grpc++, protobuf) via pkg-config.])
     # Store the raw flags from pkg-config
     RAW_PKG_CXXFLAGS="$GRPC_DEPS_CFLAGS"
     RAW_PKG_LIBS="$GRPC_DEPS_LIBS"
@@ -30,55 +29,71 @@ PKG_CHECK_MODULES([GRPC_DEPS], [grpc++ protobuf], [
     # This is the action-if-failure for PKG_CHECK_MODULES
     AC_MSG_FAILURE([
 --------------------------------------------------------------------
-Core dependency 'grpc++' or 'protobuf' not found via pkg-config.
-Please ensure these libraries and their development files are installed.
-Examples:
-  Linux: sudo apt-get install libgrpc++-dev libprotobuf-dev protobuf-compiler
-  macOS: brew install grpc protobuf
-  Windows (MSYS2/UCRT64): pacman -S mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
+A core dependency ('grpc++' or 'protobuf') was not found by pkg-config.
+This R package requires the gRPC and Protocol Buffer development libraries
+to be installed on your system and discoverable by pkg-config.
 
-'pkg-config --cflags --libs grpc++ protobuf' failed.
-See config.log for details.
+Please ensure these libraries and their development files are installed.
+Common installation commands:
+  Debian/Ubuntu: sudo apt-get install libgrpc++-dev libprotobuf-dev protobuf-compiler
+  Fedora/CentOS: sudo dnf install grpc-devel protobuf-devel protobuf-compiler
+  macOS (Homebrew): brew install grpc protobuf pkg-config
+  Windows (MSYS2/UCRT64): pacman -S mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf mingw-w64-ucrt-x86_64-pkgconf
+
+The command 'pkg-config --cflags --libs grpc++ protobuf' failed.
+Consult config.log for more detailed error messages from pkg-config.
 --------------------------------------------------------------------])
 ])
 
-# --- Start of CXXFLAGS Filtering for R CMD check warnings ---
+# --- CXXFLAGS Processing: Filtering and Deduplication ---
 AC_MSG_CHECKING([raw CXXFLAGS from pkg-config])
 AC_MSG_RESULT([$RAW_PKG_CXXFLAGS])
 
-# Filter out specific non-portable flags that R CMD check warns about (e.g., on macOS/clang)
-# This list comes from the R CMD check warning itself.
-# Note: If these flags are essential for compiling against library headers without warnings
-# from those headers, removing them might lead to other compilation warnings.
-FILTERED_PKG_CXXFLAGS="$RAW_PKG_CXXFLAGS"
+# 1. Filter out specific non-portable flags that R CMD check warns about
+#    (typically an issue on macOS/clang when flags come from Homebrew's pkg-config).
+#    This list is based on common R CMD check warnings for such flags.
+#    Caution: Removing flags might lead to compilation warnings from within library headers
+#    if those flags were intended to suppress them.
+TEMP_FILTERED_CXXFLAGS="$RAW_PKG_CXXFLAGS"
+AC_MSG_CHECKING([for non-portable CXXFLAGS to filter])
 for flag_to_remove in \
     -Wno-float-conversion \
     -Wno-implicit-float-conversion \
     -Wno-implicit-int-float-conversion \
     -Wno-unknown-warning-option \
     -Wno-unused-command-line-argument \
+    -Wnon-virtual-dtor \
 ; do
-    temp_flags=""
-    # Iterate over words in FILTERED_PKG_CXXFLAGS
-    for word in $FILTERED_PKG_CXXFLAGS; do
+    # Remove exact matches of the flag
+    # This simple loop replaces the flag with nothing if found, then reconstructs.
+    # It's generally safer than complex sed for exact word removal.
+    new_flags_accumulator=""
+    for word in $TEMP_FILTERED_CXXFLAGS; do
         if test "x$word" != "x$flag_to_remove"; then
-            temp_flags="$temp_flags $word" # Add word if it's not the one to remove
+            new_flags_accumulator="$new_flags_accumulator $word"
+        else
+            AC_MSG_NOTICE([Filtered out: $flag_to_remove])
         fi
     done
-    # Remove leading/trailing space from temp_flags before assigning back
-    FILTERED_PKG_CXXFLAGS=`echo "$temp_flags" | sed -e 's/^ *//' -e 's/ *$//'`
+    # Remove leading/trailing space from accumulator
+    TEMP_FILTERED_CXXFLAGS=`echo "$new_flags_accumulator" | sed -e 's/^ *//' -e 's/ *$//'`
 done
+# Clean up any multiple spaces that might have resulted from removals
+TEMP_FILTERED_CXXFLAGS=`echo "$TEMP_FILTERED_CXXFLAGS" | sed -e 's/  */ /g'`
+AC_MSG_RESULT([after specific filtering: $TEMP_FILTERED_CXXFLAGS])
 
-# Clean up multiple spaces that might result from removal (can happen if flags were adjacent)
-FILTERED_PKG_CXXFLAGS=`echo "$FILTERED_PKG_CXXFLAGS" | sed -e 's/  */ /g'`
+# 2. Deduplicate all remaining CXXFLAGS
+#    This handles cases like repeated -DNOMINMAX or other flags.
+AC_MSG_CHECKING([for duplicate CXXFLAGS to remove])
+# The xargs trick: split into lines, sort uniquely, rejoin.
+# Handles flags with arguments like -I/path correctly if they are single "words" to xargs.
+FINAL_PKG_CXXFLAGS=$(echo "$TEMP_FILTERED_CXXFLAGS" | xargs -n1 | sort -u | xargs)
+AC_MSG_RESULT([after deduplication: $FINAL_PKG_CXXFLAGS])
+# --- End of CXXFLAGS Processing ---
 
-AC_MSG_CHECKING([filtered CXXFLAGS for R CMD check compatibility])
-AC_MSG_RESULT([$FILTERED_PKG_CXXFLAGS])
-# --- End of CXXFLAGS Filtering ---
-
-# Make the (filtered) CXXFLAGS and (raw) LIBS available for substitution in Makevars.in
-AC_SUBST(GRPC_PKG_CXXFLAGS, ["$FILTERED_PKG_CXXFLAGS"])
-AC_SUBST(GRPC_PKG_LIBS, ["$RAW_PKG_LIBS"]) # LIBS usually don't need this type of filtering
+# Make the processed CXXFLAGS and raw LIBS available for substitution in Makevars.in
+AC_SUBST(GRPC_PKG_CXXFLAGS, ["$FINAL_PKG_CXXFLAGS"])
+AC_SUBST(GRPC_PKG_LIBS, ["$RAW_PKG_LIBS"]) # LIBS generally don't need such aggressive filtering/deduplication
 
 # Define the output files to be generated by configure from .in templates
 AC_CONFIG_FILES([src/Makevars:src/Makevars.in]) # Create src/Makevars from src/Makevars.in
