@@ -18,7 +18,7 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - {os: ubuntu-latest,   r: 'release'} # Using ubuntu-latest, usually 22.04 or 24.04
+          - {os: ubuntu-latest,   r: 'release'}
           - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
           - {os: ubuntu-latest,   r: 'oldrel-1'}
           - {os: windows-latest, r: 'release'}
@@ -28,8 +28,6 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       MSYSTEM: UCRT64
-      # Potential CXXFLAGS for gRPC build if Abseil causes issues with specific compilers
-      # GRPC_BUILD_CXXFLAGS: "-Wno-error=maybe-uninitialized"
 
     steps:
       - name: Checkout repository
@@ -51,7 +49,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             protobuf-compiler libprotobuf-dev dpkg-dev \
-            libre2-dev
+            libre2-dev # Added libre2-dev, but we will build gRPC's re2 from submodule
 
       - name: Build and Install gRPC from Source (Linux)
         if: runner.os == 'Linux'
@@ -59,18 +57,20 @@ jobs:
           GRPC_VERSION="v1.72.0"
           echo "Building gRPC version: ${GRPC_VERSION}"
 
-          sudo apt-get update
+          sudo apt-get update # Ensure lists are fresh
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf libtool pkg-config cmake clang git
 
           git clone --depth 1 --branch ${GRPC_VERSION} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
-          git submodule update --init # This will fetch re2 source among others
+          git submodule update --init
 
           mkdir -p cmake/build
           cd cmake/build
 
           echo "Configuring gRPC with CMake..."
+          # Note: -DgRPC_RE2_PROVIDER=module is intentionally omitted below
+          # to let gRPC build re2 from its bundled submodule for better compatibility.
           cmake ../.. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -80,9 +80,9 @@ jobs:
             -DgRPC_ABSL_PROVIDER=module \
             -DgRPC_CARES_PROVIDER=module \
             -DgRPC_PROTOBUF_PROVIDER=module \
-            # -DgRPC_RE2_PROVIDER=module \  <--- REMOVED to build re2 from submodule
             -DgRPC_SSL_PROVIDER=module \
             -DgRPC_ZLIB_PROVIDER=module
+            # No backslash on the last argument line for cmake
 
           echo "Building gRPC..."
           make -j$(nproc)
@@ -117,13 +117,10 @@ jobs:
 
           if [ -f "${GRPC_HEADERS_SUBDIR}/credentials.h" ]; then
             echo "SUCCESS: Found credentials.h at ${GRPC_HEADERS_SUBDIR}/credentials.h"
-            # VERIFIED_GRPC_C_INCLUDE_DIR is already set by the build step to /usr/local/include
-            # This check confirms the file is there.
           else
             echo "ERROR: credentials.h NOT FOUND at ${GRPC_HEADERS_SUBDIR}/credentials.h"
             echo "Listing contents of ${GRPC_HEADERS_SUBDIR}/ :"
             ls -A "${GRPC_HEADERS_SUBDIR}/" || echo "Could not list ${GRPC_HEADERS_SUBDIR}"
-            # Also check for the C++ version for completeness
             if [ -f "${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc++/security/credentials.h" ]; then
               echo "Note: C++ credentials.h found at ${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc++/security/credentials.h"
             elif [ -f "${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpcpp/security/credentials.h" ]; then
@@ -133,11 +130,7 @@ jobs:
           fi
 
           echo "--- Verifying pkg-config can find source-built gRPC ---"
-          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH" # Should be set by previous step's GITHUB_ENV for subsequent steps
-                                                      # For this step, it reflects the PATH at the start of this step
-                                                      # To test effect of GITHUB_ENV, run pkg-config in a *later* step or check configure output
-
-          # Test pkg-config with the path we expect to be set for ./configure
+          # Export the PKG_CONFIG_PATH that should have been set by GITHUB_ENV for this step's environment
           export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH"
           echo "Testing with PKG_CONFIG_PATH = $PKG_CONFIG_PATH"
 
@@ -187,16 +180,12 @@ jobs:
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
-      # This step is now mostly for macOS, as Linux should use the source-built gRPC
-      # The PKG_CONFIG_PATH for Linux builds (when R CMD check runs ./configure) will have /usr/local/lib/pkgconfig
       - name: Verify pkg-config setup (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
-        # For Linux, PKG_CONFIG_PATH from GITHUB_ENV will be active for subsequent steps,
-        # including the one where R CMD CHECK -> ./configure runs.
-        # This step itself might not see the GITHUB_ENV update to PKG_CONFIG_PATH immediately
-        # unless we re-export it here or ensure this step runs after the GITHUB_ENV is applied.
-        # However, the "Verify gRPC C-core headers from Source Build" step does an explicit export for its test.
+        env: # Ensure PKG_CONFIG_PATH from previous Linux build step is available
+          PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
+          echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
           echo "Verifying pkg-config for grpc++..."
           pkg-config --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
           echo "grpc++ CFLAGS: $(pkg-config --cflags grpc++)"
@@ -206,7 +195,6 @@ jobs:
           echo "grpc CFLAGS: $(pkg-config --cflags grpc)"
           echo "grpc LIBS: $(pkg-config --libs grpc)"
           echo "Verifying pkg-config for protobuf..."
-          # On Linux, protobuf is from system, on macOS from brew
           pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
           echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
           echo "protobuf LIBS: $(pkg-config --libs protobuf)"
@@ -219,29 +207,28 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          cache: false # Keep false for debugging, set to true later
+          cache: false
 
       # Show Session Info
       - name: Show R Session Info
-        # Use explicit Rscript path if direct call fails
         shell: bash
         run: |
           if [ -n "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
             RSCRIPT_EXEC="${{ steps.setup-r-env.outputs.rscript-path }}"
           else
-            RSCRIPT_EXEC="Rscript" # Fallback, might fail if PATH is not set
+            RSCRIPT_EXEC="Rscript"
           fi
           "$RSCRIPT_EXEC" -e 'options(width = 100); pkgs <- installed.packages()[, "Version"]; sessioninfo::session_info(pkgs, include_base = TRUE)'
 
       # Run R CMD Check
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
+        env: # Ensure PKG_CONFIG_PATH from Linux build step is available for ./configure
+          PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          # error-on: 'warning' # Enable if desired
-          # check-dir: 'check'
 
       # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
@@ -261,6 +248,7 @@ jobs:
           echo "DEBUG: Current PATH: $PATH"
           echo "DEBUG: Which Rscript (direct call): $(which Rscript || echo 'Rscript not found in PATH by which command')"
           echo "DEBUG: Rscript version (direct call): $(Rscript --version || echo 'Rscript --version command failed')"
+          # Corrected HTML comment typo from previous response
           echo "DEBUG: Rscript version (using setup-r path): $(${<!-- -->{ steps.setup-r-env.outputs.rscript-path }} --version || echo 'Rscript --version with explicit path failed')"
 
           if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
@@ -327,8 +315,8 @@ jobs:
               }, error = function(e) {
                 cat(sprintf("ERROR: Could not read or print log file %s. Error: %s\n", log_file_path, e$message))
                 cat("Attempting to print first few lines using system 'head' command (if available)...\n")
-                system_command <- sprintf("head -n 100 %s", shQuote(log_file_path)) # shQuote for safety
-                try(system(system_command, intern = TRUE, ignore.stderr = TRUE), silent = TRUE) # Capture output
+                system_command <- sprintf("head -n 100 %s", shQuote(log_file_path))
+                try(system(system_command, intern = TRUE, ignore.stderr = TRUE), silent = TRUE)
               }, finally = {
                 cat(sprintf("\n--- End of %s ---\n", basename(log_file_path)))
               })
@@ -337,7 +325,7 @@ jobs:
             }
           }
 
-          if (!found_any_log) { # Corrected typo here: found_any_log
+          if (!found_any_log) {
             cat(sprintf("\nNone of the primary log files (00check.log, 00install.out) were found in %s.\n", rcheck_dir))
             cat("This could be due to an early failure (e.g., during build) before log generation, or an unexpected .Rcheck directory name.\n")
 
