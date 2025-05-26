@@ -1,92 +1,42 @@
-#                                               -*- Autoconf -*-
-# Process this file with autoconf to produce a configure script.
-
-# Minimum Autoconf version required
 AC_PREREQ([2.69])
-
-# Initialize Autoconf: Package name, version, maintainer email
-AC_INIT([grpc], [0.2.1], [laurens@email.com]) # Ensure version matches DESCRIPTION
-
-# Set the source directory (relative to this file)
+AC_INIT([grpc], [0.2.1], [laurens@email.com])
 AC_CONFIG_SRCDIR([src/client.cpp])
-
-# Define optional config header file (useful for defines like HAVE_GRPC)
 AC_CONFIG_HEADERS([src/config.h])
+AC_CONFIG_AUX_DIR([tools]) # Make sure this directory exists or remove if not used
 
-# Specify directory for auxiliary build tools (like install-sh, missing)
-AC_CONFIG_AUX_DIR([tools])
+AC_PROG_CXX
+AC_PROG_CC
+# AC_PROG_CPP # Often not needed if CXX handles preprocessing
+AC_PROG_LN_S
+AC_PROG_MAKE_SET
 
-# Standard checks for essential programs
-AC_PROG_CXX          # Find C++ compiler (sets CXX variable)
-AC_PROG_CC           # Find C compiler (sets CC variable)
-AC_PROG_CPP          # Find C preprocessor (sets CPP variable)
-AC_PROG_LN_S         # Check for symbolic link command
-AC_PROG_MAKE_SET     # Check for 'make' and ensure $(MAKE) is set
+# C++17 support
+AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory]) # This adds -std=c++17 (or similar) to CXX
+AC_SUBST(CXX_STD, CXX17) # Based on AX_CXX_COMPILE_STDCXX success for C++17.
+                         # Or, more robustly, AX_CXX_COMPILE_STDCXX itself modifies CXX.
+                         # So, in Makevars.in, CXX_STD might not be strictly needed if R's CXX already has the std flag.
+                         # However, explicitly setting CXX_STD=CXX17 via R's mechanism is fine.
 
-# Check for C++17 support (required by Abseil/modern gRPC)
-# This macro requires the Autoconf Archive (autoconf-archive package)
-AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory])
+PKG_PROG_PKG_CONFIG([0.28])
 
-# Check for pkg-config tool
-PKG_PROG_PKG_CONFIG([0.28]) # Minimum version 0.28 recommended
-
-# Check for the grpc++ and protobuf libraries using pkg-config
-# If found, sets shell variables: GRPCXX_CFLAGS, GRPCXX_LIBS, PROTOBUF_CFLAGS, PROTOBUF_LIBS
-# If not found, run the action-if-failure (AC_MSG_FAILURE)
-PKG_CHECK_MODULES([GRPCXX], [grpc++], [], [
-  AC_MSG_FAILURE([
+# Check for grpc++ and its dependencies (protobuf is usually pulled by grpc++)
+PKG_CHECK_MODULES([GRPC_DEPS], [grpc++ protobuf], [
+    AC_MSG_NOTICE([Found grpc++ and protobuf via pkg-config.])
+    # Use the raw flags from pkg-config. Filtering is usually not needed and can be harmful.
+    # The system's pkg-config files should provide compatible flags.
+    GRPC_PKG_CXXFLAGS="$GRPC_DEPS_CFLAGS"
+    GRPC_PKG_LIBS="$GRPC_DEPS_LIBS"
+],[
+    AC_MSG_FAILURE([
 --------------------------------------------------------------------
-grpc++ library (libgrpc++-dev or equivalent) not found.
-'pkg-config --cflags --libs grpc++' failed.
-Please install the gRPC C++ development package. See README.
+grpc++ or protobuf library not found via pkg-config.
+Please install development packages (e.g., libgrpc++-dev, libprotobuf-dev).
+'pkg-config --cflags --libs grpc++ protobuf' failed.
 --------------------------------------------------------------------])
 ])
 
-PKG_CHECK_MODULES([PROTOBUF], [protobuf], [], [
-  AC_MSG_FAILURE([
---------------------------------------------------------------------
-Protocol Buffers library (libprotobuf-dev or equivalent) not found.
-'pkg-config --cflags --libs protobuf' failed.
-Please install the Protocol Buffers development package. See README.
---------------------------------------------------------------------])
-])
+AC_SUBST([GRPC_PKG_CXXFLAGS])
+AC_SUBST([GRPC_PKG_LIBS])
 
-# Combine and filter CFLAGS from grpc++ and protobuf
-# The order can sometimes matter if there are overlapping includes,
-# though usually pkg-config handles this.
-AC_MSG_CHECKING([raw CFLAGS from pkg-config for grpc++ and protobuf])
-RAW_PKG_CXXFLAGS="${GRPCXX_CFLAGS} ${PROTOBUF_CFLAGS}"
-AC_MSG_RESULT([$RAW_PKG_CXXFLAGS])
-
-AC_MSG_CHECKING([filtering non-portable CXXFLAGS])
-# List of patterns to remove (shell regex, so escape as needed for sed)
-# Add more patterns here if other -Wno- flags appear
-NONPORTABLE_FLAG_PATTERNS="-Wno-float-conversion|-Wno-implicit-float-conversion|-Wno-implicit-int-float-conversion|-Wno-unknown-warning-option|-Wno-unused-command-line-argument"
-
-# Use sed to remove each pattern. Loop or multiple -e might be needed.
-# This sed command tries to remove all instances of the patterns.
-# The patterns are separated by | in the variable.
-# We replace each found pattern with an empty string.
-# The outer loop with `echo ... | sed ...` is to handle multiple flags on one line.
-FILTERED_PKG_CXXFLAGS=`echo "$RAW_PKG_CXXFLAGS" | sed \
-  -e "s/$NONPORTABLE_FLAG_PATTERNS//g" \
-  -e "s/  */ /g" \
-  -e "s/^ *//g" \
-  -e "s/ *$//g"`
-AC_MSG_RESULT([$FILTERED_PKG_CXXFLAGS])
-
-# Combine LIBS from grpc++ and protobuf
-AC_MSG_CHECKING([raw LIBS from pkg-config for grpc++ and protobuf])
-RAW_PKG_LIBS="${GRPCXX_LIBS} ${PROTOBUF_LIBS}"
-AC_MSG_RESULT([$RAW_PKG_LIBS])
-# LIBS usually don't need filtering for non-portability in the same way CXXFLAGS do
-
-# Make the (filtered) flags available for substitution in Makevars.in
-AC_SUBST([GRPC_PKG_CXXFLAGS], ["${FILTERED_PKG_CXXFLAGS}"])
-AC_SUBST([GRPC_PKG_LIBS], ["${RAW_PKG_LIBS}"]) # LIBS are usually fine
-
-# Define the output files to be generated by configure from .in templates
-AC_CONFIG_FILES([src/Makevars:src/Makevars.in]) # Create src/Makevars from src/Makevars.in
-
-# Finalize the configuration process and generate output files
+AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
 AC_OUTPUT

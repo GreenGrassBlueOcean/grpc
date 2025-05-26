@@ -1,4 +1,30 @@
 # src/Makevars.win
+# For R (UCRT versions) and Rtools (UCRT64 environment)
+
+# MINGW_PREFIX is provided by R's Makeconf and points to the UCRT64 root
+# e.g., c:/rtools45/ucrt64 (or /ucrt64 in MSYS shell)
+GRPC_UCRT_INCLUDE_DIR = $(MINGW_PREFIX)/include
+
+# CXXFLAGS:
+# R's Makeconf automatically adds $(LOCAL_SOFT)/include (e.g. c:/rtools45/ucrt64/include).
+# We can add $(MINGW_PREFIX)/include explicitly if it might differ or for clarity,
+# or rely on LOCAL_CPPFLAGS from Makeconf.
+# pkg-config --cflags grpc++ on UCRT64 often just gives -pthread -DNOMINMAX.
+# The essential include path is covered by R's Makeconf (LOCAL_CPPFLAGS).
+# Use VERIFIED_GRPC_C_INCLUDE_DIR if set by CI (can be empty for local builds).
+GRPC_CI_INCLUDE_FLAG = $(if $(VERIFIED_GRPC_C_INCLUDE_DIR),-I$(VERIFIED_GRPC_C_INCLUDE_DIR))
+# PKG_CXXFLAGS_FROM_PKG_CONFIG = $(shell pkg-config --cflags grpc++) # Usually -pthread -DNOMINMAX
+
+PKG_CXXFLAGS = $(GRPC_CI_INCLUDE_FLAG) $(shell pkg-config --cflags grpc++) # Add -I"$(GRPC_UCRT_INCLUDE_DIR)" if relying purely on this Makevars.win and not Makeconf's LOCAL_CPPFLAGS
+
+# LIBS: Use pkg-config to get the library flags dynamically. This is robust.
+PKG_LIBS = $(shell pkg-config --libs grpc++)
+
+# C++ Standard
+CXX_STD = CXX17
+
+
+# src/Makevars.win
 # For R (UCRT versions, e.g., R 4.2.0+ ucrt) and Rtools (UCRT64 environment)
 #
 # Ensure the following packages are installed in your Rtools UCRT64 MSYS2 shell:
@@ -11,16 +37,16 @@
 
 # $(MINGW_PREFIX) is provided by R's build system. For a UCRT R version,
 # it should point to the Rtools UCRT64 directory (e.g., C:/rtools45/ucrt64).
-GRPC_UCRT_INCLUDE_DIR = $(MINGW_PREFIX)/include
-GRPC_UCRT_LIB_DIR = $(MINGW_PREFIX)/lib
+#GRPC_UCRT_INCLUDE_DIR = $(MINGW_PREFIX)/include
+#GRPC_UCRT_LIB_DIR = $(MINGW_PREFIX)/lib
 
 # Flags from UCRT64 shell: pkg-config --cflags grpc++
 # (plus the explicit include path for robustness)
-PKG_CXXFLAGS = -I"$(GRPC_UCRT_INCLUDE_DIR)" -pthread -DNOMINMAX
+#PKG_CXXFLAGS = -I"$(GRPC_UCRT_INCLUDE_DIR)" -pthread -DNOMINMAX
 
 # Flags from UCRT64 shell: pkg-config --libs grpc++
 # (plus the explicit library path and direct major dependencies for robustness)
-PKG_LIBS = -L"$(GRPC_UCRT_LIB_DIR)" \
+#PKG_LIBS = -L"$(GRPC_UCRT_LIB_DIR)" \
     -lgrpc++ -lgrpc -labsl_statusor -lgpr -labsl_log_internal_check_op -labsl_flags_internal -labsl_flags_reflection \
     -labsl_flags_private_handle_accessor -labsl_flags_commandlineflag -labsl_flags_commandlineflag_internal \
     -labsl_flags_config -labsl_flags_program_name -labsl_raw_hash_set -labsl_hashtablez_sampler \
@@ -46,4 +72,4 @@ PKG_LIBS = -L"$(GRPC_UCRT_LIB_DIR)" \
     -lws2_32 -lmswsock
 
 # Require C++17 for modern gRPC/Abseil compatibility
-CXX_STD = CXX17
+#CXX_STD = CXX17
