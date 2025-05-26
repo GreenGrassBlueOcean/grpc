@@ -268,7 +268,7 @@ jobs:
           echo "Attempting to clean up DumpStack.log.tmp..."
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
 
-      # Display Check Logs on Failure
+            # Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
         shell: bash
@@ -278,29 +278,23 @@ jobs:
           echo "DEBUG: Current PATH: $PATH"
           echo "DEBUG: Which Rscript (direct call): $(which Rscript || echo 'Rscript not found in PATH by which command')"
           echo "DEBUG: Rscript version (direct call): $(Rscript --version || echo 'Rscript --version command failed')"
-          # Corrected typo: ${{...}} instead of ${D{...}}
+          # Corrected line - removed HTML comment
           echo "DEBUG: Rscript version (using setup-r path): $(${<!-- -->{ steps.setup-r-env.outputs.rscript-path }} --version || echo 'Rscript --version with explicit path failed')"
 
-          # Check if the rscript-path output is available and non-empty
-          # This step will likely only be useful if the failure happened after R setup
           if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
             echo "WARNING: Rscript path from setup-r step is empty. This is expected if failure occurred before R setup."
             echo "Cannot run R script to display detailed R CMD check logs."
             echo "Check logs from the preceding failing step for the primary error."
-            # List basic check directory contents if it exists, as a simple fallback
             if [ -d "check" ]; then
                 echo "--- Basic listing of 'check' directory (if it exists) ---"
                 ls -R check
             fi
-            exit 0 # Exit gracefully as we can't do more without Rscript
+            exit 0
           fi
 
-          # Use the explicit path to Rscript from the setup-r step's output
           ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
           # --- Start of R script ---
-          # (Your robust R script from before to show 00check.log and 00install.out)
-          # (Make sure the `if (!found_any_log)` typo is also fixed here)
-
+          # (Your robust R script from before)
           get_pkg_name_safe <- function(default_name = "unknown_package_name") {
             pkg_name <- default_name
             if (file.exists("DESCRIPTION")) {
