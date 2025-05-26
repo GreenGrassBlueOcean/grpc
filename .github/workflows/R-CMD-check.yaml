@@ -57,48 +57,36 @@ jobs:
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
 
-            - name: Find gRPC C-core headers and verify pkg-config (Linux)
+      - name: Find and Verify gRPC C-core headers (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "--- Verifying contents of /usr/include and /usr/include/grpc ---"
-          echo "Listing /usr/include/grpc* (top level entries):"
-          ls -ld /usr/include/grpc* || echo "/usr/include/grpc* not found or ls failed"
-          echo "Recursively listing /usr/include/grpc (if it exists):"
-          ls -R /usr/include/grpc || echo "/usr/include/grpc directory not found or ls failed"
+          echo "--- Locating 'grpc/grpc.h' (a key C-core header) ---"
+          # Try to find the directory containing 'grpc/grpc.h'
+          GRPC_H_DIR=$(sudo find /usr/include -type f -name grpc.h -exec dirname {} \; | grep '/grpc$' | head -n 1)
 
-          echo "--- Explicitly checking for common C-core headers in /usr/include/grpc/ ---"
-          HEADERS_TO_CHECK=(grpc.h status.h credentials.h byte_buffer.h slice.h)
-          HEADERS_FOUND_CORRECTLY=true
-          for hdr in "${HEADERS_TO_CHECK[@]}"; do
-            if [ -f "/usr/include/grpc/${hdr}" ]; then
-              echo "Found: /usr/include/grpc/${hdr}"
+          if [ -n "$GRPC_H_DIR" ]; then
+            echo "Found 'grpc.h' in directory: $GRPC_H_DIR"
+            # The include path should be the parent of this 'grpc' directory
+            # e.g., if GRPC_H_DIR is /usr/include/foo/grpc, then C_INCLUDE_DIR is /usr/include/foo
+            GRPC_C_INCLUDE_DIR=$(dirname "$GRPC_H_DIR")
+            echo "Deduced base include directory for -I: $GRPC_C_INCLUDE_DIR"
+
+            echo "--- Verifying 'credentials.h' in the deduced path ---"
+            if [ -f "${GRPC_C_INCLUDE_DIR}/grpc/credentials.h" ]; then
+              echo "SUCCESS: Found ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
+              echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
             else
-              echo "ERROR: NOT FOUND: /usr/include/grpc/${hdr}"
-              HEADERS_FOUND_CORRECTLY=false
+              echo "ERROR: credentials.h NOT FOUND at ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
+              echo "Listing contents of ${GRPC_C_INCLUDE_DIR}/grpc/ :"
+              ls -A "${GRPC_C_INCLUDE_DIR}/grpc/" || echo "Could not list ${GRPC_C_INCLUDE_DIR}/grpc/"
+              exit 1
             fi
-          done
-
-          if [ "$HEADERS_FOUND_CORRECTLY" = true ]; then
-            echo "All essential C-core headers seem present in /usr/include/grpc/"
-            echo "Setting VERIFIED_GRPC_C_INCLUDE_DIR=/usr/include"
-            echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
           else
-            echo "ERROR: One or more essential gRPC C-core headers missing from /usr/include/grpc/."
-            echo "Attempting a broader search for 'grpc/credentials.h'..."
-            FOUND_PATH=$(sudo find /usr/include -type f -path '*/grpc/credentials.h' -print -quit)
-            if [ -n "$FOUND_PATH" ]; then
-                echo "Broader search found credentials.h at: $FOUND_PATH"
-                GRPC_C_INCLUDE_DIR=$(dirname "$FOUND_PATH" | sed 's|/grpc$||')
-                echo "Deduced C-core include directory for -I (from broader search): $GRPC_C_INCLUDE_DIR"
-                echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
-            else
-                echo "ERROR: grpc/credentials.h (C-core header) still not found under /usr/include with broader search."
-                exit 1
-            fi
+            echo "ERROR: Core 'grpc/grpc.h' not found in a standard-looking location under /usr/include."
+            echo "Listing all 'grpc.h' under /usr for inspection:"
+            sudo find /usr -name grpc.h || echo "No grpc.h found anywhere under /usr"
+            exit 1
           fi
-
-          echo "--- Verifying pkg-config for grpc++ ---"
-          # ... (rest of pkg-config checks as before) ...
 
       # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
@@ -141,10 +129,10 @@ jobs:
           pkg-config --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
           echo "grpc++ CFLAGS: $(pkg-config --cflags grpc++)"
           echo "grpc++ LIBS: $(pkg-config --libs grpc++)"
-          echo "Verifying pkg-config for grpc (C-core)..." # ADD THIS BLOCK
+          echo "Verifying pkg-config for grpc (C-core)..."
           pkg-config --modversion grpc || echo "WARNING: pkg-config cannot find grpc (C-core)"
-          echo "grpc CFLAGS: $(pkg-config --cflags grpc)"   # ADD THIS BLOCK
-          echo "grpc LIBS: $(pkg-config --libs grpc)"     # ADD THIS BLOCK
+          echo "grpc CFLAGS: $(pkg-config --cflags grpc)"
+          echo "grpc LIBS: $(pkg-config --libs grpc)"
           echo "Verifying pkg-config for protobuf..."
           pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
           echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
@@ -159,7 +147,6 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          # Use 'cache: false' to disable caching, not 'cache-enabled: false'
           cache: false # For debugging pak error, re-enable later by removing or setting to true
 
       # Show Session Info
@@ -177,9 +164,8 @@ jobs:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-
-          #error-on: 'warning' # This is a valid input
-          #check-dir: 'check'   # This is a valid input
+          # error-on: 'warning'
+          # check-dir: 'check'
 
       # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
@@ -190,11 +176,8 @@ jobs:
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
 
       # Display Check Logs on Failure
-      # ... (this step can remain as is) ...
       - name: Show check logs on failure
         if: failure()
-        # Changed shell to bash to ensure Rscript is found via PATH.
-        # The Rscript {0} shell might have issues locating Rscript in this specific failure context.
         shell: bash
         run: |
           echo "Attempting to display R CMD check logs..."
@@ -202,12 +185,9 @@ jobs:
           echo "DEBUG: Which Rscript: $(which Rscript || echo 'Rscript not found in PATH by which command')"
           echo "DEBUG: Rscript version: $(Rscript --version || echo 'Rscript --version command failed')"
 
-          # Pass the R script to Rscript via stdin using a heredoc.
-          # This is often more robust for multi-line scripts than Rscript -e "..."
           Rscript - <<EOF
           # --- Start of R script ---
 
-          # More robust function to get package name from DESCRIPTION
           get_pkg_name_safe <- function(default_name = "unknown_package_name") {
             pkg_name <- default_name
             if (file.exists("DESCRIPTION")) {
@@ -233,10 +213,9 @@ jobs:
           if (pkg_name_desc == "unknown_package_name") {
             cat("WARNING: Could not reliably determine package name from DESCRIPTION.\n")
             cat("The .Rcheck directory might be named differently or not exist.\n")
-            # As a fallback, list contents of 'check' if it exists, to help find the .Rcheck dir manually
             if (dir.exists("check")) {
               cat("Listing contents of 'check' directory as package name is uncertain:\n")
-              print(list.files("check")) # Lists non-recursively by default
+              print(list.files("check"))
             }
           }
 
@@ -250,20 +229,18 @@ jobs:
 
           found_any_log <- FALSE
           for (log_file_path in log_files_to_show) {
-            cat(sprintf("Checking for: %s\n", log_file_path)) # More verbose checking
+            cat(sprintf("Checking for: %s\n", log_file_path))
             if (file.exists(log_file_path)) {
               found_any_log <- TRUE
               cat(sprintf("\n--- Start of %s ---\n", basename(log_file_path)))
               tryCatch({
-                # readLines can fail on weird encodings or very large files.
                 log_content <- readLines(log_file_path, warn = FALSE)
-                writeLines(log_content) # writeLines adds a final newline
+                writeLines(log_content)
               }, error = function(e) {
                 cat(sprintf("ERROR: Could not read or print log file %s. Error: %s\n", log_file_path, e$message))
-                # Alternative: try to dump first few lines if R fails
                 cat("Attempting to print first few lines using system 'head' command (if available)...\n")
-                system_command <- sprintf("head -n 100 %s", shQuote(log_file_path))
-                try(system(system_command), silent = TRUE)
+                system_command <- sprintf("head -n 100 %s", shQuote(log_file_path)) # shQuote for safety
+                try(system(system_command, intern = TRUE, ignore.stderr = TRUE), silent = TRUE) # Capture output
               }, finally = {
                 cat(sprintf("\n--- End of %s ---\n", basename(log_file_path)))
               })
@@ -295,7 +272,6 @@ jobs:
           EOF
 
       # Upload Full Check Results Directory on Failure
-      # ... (this step can remain as is) ...
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
