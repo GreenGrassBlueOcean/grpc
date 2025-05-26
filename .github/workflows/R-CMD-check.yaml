@@ -56,123 +56,79 @@ jobs:
         run: |
           echo "--- System Information ---"
           lsb_release -a
-          uname -a
-
-          echo "--- Installed gRPC package version (libgrpc-dev) ---"
           apt-cache policy libgrpc-dev || echo "apt-cache policy failed for libgrpc-dev"
 
-          echo "--- Files installed by libgrpc-dev (searching for credentials.h) ---"
-          sudo dpkg-query -L libgrpc-dev | grep "credentials.h" || echo "credentials.h not listed by dpkg-query -L libgrpc-dev"
-          echo "--- Files installed by libgrpc-dev (searching for grpc.h) ---"
-          sudo dpkg-query -L libgrpc-dev | grep "/grpc.h" || echo "grpc.h not listed by dpkg-query -L libgrpc-dev"
+          echo "--- [DIAG] Files listed by libgrpc-dev (dpkg-query -L) ---"
+          sudo dpkg-query -L libgrpc-dev > libgrpc-dev_files.txt
+          echo "Full file list for libgrpc-dev in libgrpc-dev_files.txt artifact."
+          echo "Searching for 'grpc.h' in libgrpc-dev files:"
+          grep "/grpc.h$" libgrpc-dev_files.txt || echo "'grpc.h' not in libgrpc-dev files list."
+          echo "Searching for 'credentials.h' in libgrpc-dev files:"
+          grep "credentials.h" libgrpc-dev_files.txt || echo "'credentials.h' (any path) not in libgrpc-dev files list."
 
-          echo "--- pkg-config output for grpc (C-core) ---"
-          echo "PKG_CONFIG_PATH: $PKG_CONFIG_PATH"
-          pkg-config --exists grpc && echo "grpc found by pkg-config" || echo "grpc NOT found by pkg-config"
-          GRPC_CFLAGS_PKGCONFIG=$(pkg-config --cflags grpc || echo 'pkg-config --cflags grpc failed')
-          echo "Cflags: $GRPC_CFLAGS_PKGCONFIG"
-          echo "Libs: $(pkg-config --libs grpc || echo 'pkg-config --libs grpc failed')"
+          echo "--- [DIAG] pkg-config output for 'grpc' (C-core) ---"
+          GRPC_CFLAGS_PKGCONFIG=$(pkg-config --cflags grpc || echo "pkg-config --cflags grpc failed")
+          echo "pkg-config --cflags grpc: $GRPC_CFLAGS_PKGCONFIG"
+          echo "pkg-config --libs grpc: $(pkg-config --libs grpc || echo "pkg-config --libs grpc failed")"
 
-          echo "--- Locating 'grpc/grpc.h' (a key C-core header) ---"
-          GRPC_H_PATH_FROM_FIND=$(sudo find /usr/include /opt/local/include -type f -name grpc.h -print -quit 2>/dev/null)
+          echo "--- [DIAG] pkg-config output for 'grpc++' ---"
+          GRPCXX_CFLAGS_PKGCONFIG=$(pkg-config --cflags grpc++ || echo "pkg-config --cflags grpc++ failed")
+          echo "pkg-config --cflags grpc++: $GRPCXX_CFLAGS_PKGCONFIG"
+          echo "pkg-config --libs grpc++: $(pkg-config --libs grpc++ || echo "pkg-config --libs grpc++ failed")"
 
-          if [ -z "$GRPC_H_PATH_FROM_FIND" ]; then
-            echo "ERROR: Core 'grpc.h' not found by find command in /usr/include or /opt/local/include."
-            echo "Checking if pkg-config cflags provide a clue..."
-            if [[ "$GRPC_CFLAGS_PKGCONFIG" == *"-I"* ]]; then
-               # Extract -I paths from pkg-config
-               PKG_CONFIG_INCLUDE_PATHS=$(echo "$GRPC_CFLAGS_PKGCONFIG" | grep -o '\-I[^ ]*' | sed 's/^-I//')
-               for path in $PKG_CONFIG_INCLUDE_PATHS; do
-                 if [ -f "$path/grpc/grpc.h" ]; then
-                   GRPC_H_PATH_FROM_FIND="$path/grpc/grpc.h"
-                   echo "Found grpc.h via pkg-config cflags at $GRPC_H_PATH_FROM_FIND"
-                   break
-                 elif [ -f "$path/grpc.h" ]; then # If pkg-config -I gives the dir containing grpc/
-                   GRPC_H_PATH_FROM_FIND="$path/grpc.h"
-                   echo "Found grpc.h via pkg-config cflags at $GRPC_H_PATH_FROM_FIND (assuming -I<path_to_grpc_dir>)"
-                   break
-                 fi
-               done
-            fi
-          fi
+          echo "--- Locating gRPC C-core headers ---"
+          # Attempt to find the C-core credentials.h
+          # We know grpc.h is at /usr/include/grpc/grpc.h
+          # We want to find a credentials.h that would be included as <grpc/credentials.h>
+          # or <grpc/some_subdir/credentials.h>
 
-          if [ -n "$GRPC_H_PATH_FROM_FIND" ]; then
-            echo "Found 'grpc.h' at: $GRPC_H_PATH_FROM_FIND"
-            GRPC_H_DIR=$(dirname "$GRPC_H_PATH_FROM_FIND")
-            echo "Directory containing grpc.h: $GRPC_H_DIR"
+          C_CORE_CREDENTIALS_H_PATH=""
+          EXPECTED_C_CORE_PATH="/usr/include/grpc/credentials.h"
 
-            BASE_INCLUDE_DIR=$(dirname "$GRPC_H_DIR")
-            if [ "$GRPC_H_DIR" = "/usr/include" ] || [ "$GRPC_H_DIR" = "/opt/local/include" ] || [[ "$GRPC_H_DIR" == *"/grpc" && "$(basename "$BASE_INCLUDE_DIR")" != "grpc" ]]; then
-              # If grpc.h is in /usr/include/grpc, BASE_INCLUDE_DIR becomes /usr/include
-              # If grpc.h is in /usr/include directly (unlikely), BASE_INCLUDE_DIR is /usr/include
-              true # BASE_INCLUDE_DIR is likely correct
-            else
-               # If GRPC_H_DIR itself doesn't look like .../grpc, then it might be the base include dir
-               BASE_INCLUDE_DIR="$GRPC_H_DIR"
-            fi
-            echo "Deduced base include directory for -I: $BASE_INCLUDE_DIR"
+          echo "Searching for C-core credentials.h under /usr/include/grpc/ ..."
+          # Search for any file named credentials.h directly under /usr/include/grpc or its subdirectories
+          # and prioritize one that is NOT under a "grpc++" or "grpcpp" subdirectory
+          FOUND_C_HEADERS=$(sudo find /usr/include/grpc -name credentials.h -type f -print 2>/dev/null | grep -v '/grpc++/\|/grpcpp/')
 
-            CREDENTIALS_H_PATH=""
-            # Search robustly for credentials.h
-            # Common pattern: #include <grpc/credentials.h> or <grpc/impl/codegen/credentials.h> etc.
-            # So, we need to find a credentials.h such that $BASE_INCLUDE_DIR/grpc/.../credentials.h works
+          if [ -n "$FOUND_C_HEADERS" ]; then
+            # If multiple are found (e.g., in impl/, core/, etc.), pick one.
+            # Prefer one that looks like it could be part of the public C API.
+            # This is heuristic. For now, just take the first one found by the filtered find.
+            C_CORE_CREDENTIALS_H_PATH=$(echo "$FOUND_C_HEADERS" | head -n 1)
+            echo "Found potential C-core credentials.h at: $C_CORE_CREDENTIALS_H_PATH"
 
-            # Try #include <grpc/credentials.h> relative to BASE_INCLUDE_DIR
-            if [ -f "${BASE_INCLUDE_DIR}/grpc/credentials.h" ]; then
-                CREDENTIALS_H_PATH="${BASE_INCLUDE_DIR}/grpc/credentials.h"
-                echo "SUCCESS (Path 1): Found credentials.h at ${CREDENTIALS_H_PATH} (for #include <grpc/credentials.h>)"
-            fi
+            # Now, determine the correct -I flag for this.
+            # If C_CORE_CREDENTIALS_H_PATH is /usr/include/grpc/foo/bar/credentials.h
+            # and your code does #include <grpc/foo/bar/credentials.h>, then -I/usr/include is fine.
+            # If your code does #include <grpc/credentials.h> and the file is /usr/include/grpc/credentials.h,
+            # then -I/usr/include is fine.
+            # The tricky part is if the file is, say, /usr/include/grpc/internal/credentials.h and you want
+            # to include it as <grpc/credentials.h> -- this would require -I/usr/include/grpc/internal, which is unlikely.
 
-            # If not found, search more broadly under $BASE_INCLUDE_DIR/grpc for any credentials.h
-            if [ -z "$CREDENTIALS_H_PATH" ]; then
-                 FOUND_PATHS=$(sudo find "${BASE_INCLUDE_DIR}/grpc" -name credentials.h -type f -print 2>/dev/null)
-                 if [ -n "$FOUND_PATHS" ]; then
-                    CREDENTIALS_H_PATH=$(echo "$FOUND_PATHS" | head -n 1) # Take the first one found
-                    echo "SUCCESS (Path 2 - Broad Search): Found credentials.h at ${CREDENTIALS_H_PATH}"
-                 fi
-            fi
+            # Let's assume the most common scenario: we need -I/usr/include for includes like
+            # <grpc/something.h> or <grpc/subdir/something.h>
+            PROPOSED_C_INCLUDE_DIR="/usr/include"
+            echo "Using PROPOSED_C_INCLUDE_DIR for C-core: $PROPOSED_C_INCLUDE_DIR"
+            echo "VERIFIED_GRPC_C_INCLUDE_DIR=${PROPOSED_C_INCLUDE_DIR}" >> $GITHUB_ENV
+            echo "VERIFIED_GRPC_C_INCLUDE_DIR set to: ${PROPOSED_C_INCLUDE_DIR}"
 
-            # Fallback: Search all of /usr/include if still not found
-             if [ -z "$CREDENTIALS_H_PATH" ]; then
-                 echo "credentials.h not found with preferred paths. Searching all of /usr/include..."
-                 FOUND_PATHS=$(sudo find "/usr/include" -name credentials.h -type f -print 2>/dev/null)
-                 if [ -n "$FOUND_PATHS" ]; then
-                    CREDENTIALS_H_PATH=$(echo "$FOUND_PATHS" | head -n 1)
-                    # Determine the correct BASE_INCLUDE_DIR for this found path
-                    # e.g. if found at /usr/include/foo/grpc/bar/credentials.h
-                    # and we need -I /usr/include/foo for #include <grpc/bar/credentials.h>
-                    # This is tricky to automate perfectly; for now, we'll stick to the earlier BASE_INCLUDE_DIR
-                    # or assume /usr/include if it's directly under a /grpc subdir of /usr/include
-                    if [[ "$CREDENTIALS_H_PATH" == "/usr/include/grpc/"* ]]; then
-                        BASE_INCLUDE_DIR="/usr/include"
-                        echo "SUCCESS (Path 3 - Global Search under /usr/include): Found ${CREDENTIALS_H_PATH}, using BASE_INCLUDE_DIR=${BASE_INCLUDE_DIR}"
-                    else
-                        # More complex path, BASE_INCLUDE_DIR might need careful deduction.
-                        # For now, we use the previously deduced BASE_INCLUDE_DIR.
-                        # This part might need refinement based on actual paths found.
-                        echo "WARNING (Path 3 - Global Search under /usr/include): Found ${CREDENTIALS_H_PATH}, but optimal BASE_INCLUDE_DIR is complex to deduce. Using earlier: ${BASE_INCLUDE_DIR}"
-                    fi
-                 fi
-            fi
-
-
-            if [ -n "$CREDENTIALS_H_PATH" ]; then
-              echo "Verified: credentials.h exists at ${CREDENTIALS_H_PATH}"
-              echo "VERIFIED_GRPC_C_INCLUDE_DIR=${BASE_INCLUDE_DIR}" >> $GITHUB_ENV
-              echo "VERIFIED_GRPC_C_INCLUDE_DIR set to: ${BASE_INCLUDE_DIR}"
-              echo "Ensure your R package's 'configure' script or src/Makevars uses this env var OR uses pkg-config for 'grpc' (C-core)."
-            else
-              echo "ERROR: credentials.h NOT FOUND even after broader search."
-              echo "Listing contents of ${GRPC_H_DIR} (where grpc.h was found):"
-              ls -A "${GRPC_H_DIR}" || echo "Could not list ${GRPC_H_DIR}"
-              echo "Listing all 'credentials.h' under /usr/include for inspection:"
-              sudo find /usr/include -name credentials.h -ls || echo "No credentials.h found anywhere under /usr/include by find"
-              exit 1
-            fi
           else
-            echo "ERROR: Core 'grpc.h' not found."
+            echo "ERROR: No C-core style 'credentials.h' found under /usr/include/grpc/ (excluding grpc++/grpcpp subdirs)."
+            echo "This means #include <grpc/credentials.h> will likely fail with standard include paths."
+            echo "The C++ version is at /usr/include/grpc++/security/credentials.h."
+            echo "Consider if your C-core code needs to adapt its include, or if a different dev package is needed."
+            # List all credentials.h to see what's available system-wide for gRPC related paths
+            echo "Listing all 'credentials.h' under /usr/include/grpc* for inspection:"
+            sudo find /usr/include/grpc* -name credentials.h -ls || echo "No credentials.h found under /usr/include/grpc* by find"
             exit 1
           fi
+
+      - name: Upload libgrpc-dev file list # New step to upload diagnostic artifact
+        if: runner.os == 'Linux' && (always() || failure()) # Run even if previous steps fail
+        uses: actions/upload-artifact@v4
+        with:
+          name: libgrpc-dev-files-ubuntu-24.04
+          path: libgrpc-dev_files.txt
 
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
