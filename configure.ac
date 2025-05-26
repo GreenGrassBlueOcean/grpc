@@ -1,42 +1,87 @@
 AC_PREREQ([2.69])
-AC_INIT([grpc], [0.2.1], [laurens@email.com])
-AC_CONFIG_SRCDIR([src/client.cpp])
-AC_CONFIG_HEADERS([src/config.h])
-AC_CONFIG_AUX_DIR([tools]) # Make sure this directory exists or remove if not used
+AC_INIT([grpc], [0.2.1], [laurens@email.com]) # Ensure this matches your package name, version, email
+AC_CONFIG_SRCDIR([src/client.cpp])          # Ensure this points to a key C++ source file in your src/ dir
+AC_CONFIG_HEADERS([src/config.h])           # Optional: if you use config.h for #defines from configure
+AC_CONFIG_AUX_DIR([tools])                  # Optional: standard place for autotools helper scripts
 
-AC_PROG_CXX
-AC_PROG_CC
-# AC_PROG_CPP # Often not needed if CXX handles preprocessing
-AC_PROG_LN_S
-AC_PROG_MAKE_SET
+# Standard checks for essential programs
+AC_PROG_CXX          # Find C++ compiler (sets CXX variable)
+AC_PROG_CC           # Find C compiler (sets CC variable)
+AC_PROG_LN_S         # Check for symbolic link command
+AC_PROG_MAKE_SET     # Check for 'make' and ensure $(MAKE) is set
 
-# C++17 support
-AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory]) # This adds -std=c++17 (or similar) to CXX
-AC_SUBST(CXX_STD, CXX17) # Based on AX_CXX_COMPILE_STDCXX success for C++17.
-                         # Or, more robustly, AX_CXX_COMPILE_STDCXX itself modifies CXX.
-                         # So, in Makevars.in, CXX_STD might not be strictly needed if R's CXX already has the std flag.
-                         # However, explicitly setting CXX_STD=CXX17 via R's mechanism is fine.
+# Check for C++17 support (requires autoconf-archive for AX_CXX_COMPILE_STDCXX)
+# This macro will add necessary compiler flags (like -std=c++17) to CXX if needed.
+AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory])
+# For src/Makevars.in, R's system uses CXX_STD = CXX17, which is fine.
+# If you wanted to pass the exact flags AX_CXX_COMPILE_STDCXX added, it's more complex.
+# For now, relying on R's CXX_STD = CXX17 mechanism is simpler.
 
-PKG_PROG_PKG_CONFIG([0.28])
+# Check for pkg-config tool
+PKG_PROG_PKG_CONFIG([0.28]) # Minimum version 0.28 recommended
 
-# Check for grpc++ and its dependencies (protobuf is usually pulled by grpc++)
+# Check for the grpc++ and protobuf libraries using pkg-config
 PKG_CHECK_MODULES([GRPC_DEPS], [grpc++ protobuf], [
     AC_MSG_NOTICE([Found grpc++ and protobuf via pkg-config.])
-    # Use the raw flags from pkg-config. Filtering is usually not needed and can be harmful.
-    # The system's pkg-config files should provide compatible flags.
-    GRPC_PKG_CXXFLAGS="$GRPC_DEPS_CFLAGS"
-    GRPC_PKG_LIBS="$GRPC_DEPS_LIBS"
+    # Store the raw flags from pkg-config
+    RAW_PKG_CXXFLAGS="$GRPC_DEPS_CFLAGS"
+    RAW_PKG_LIBS="$GRPC_DEPS_LIBS"
 ],[
+    # This is the action-if-failure for PKG_CHECK_MODULES
     AC_MSG_FAILURE([
 --------------------------------------------------------------------
-grpc++ or protobuf library not found via pkg-config.
-Please install development packages (e.g., libgrpc++-dev, libprotobuf-dev).
+Core dependency 'grpc++' or 'protobuf' not found via pkg-config.
+Please ensure these libraries and their development files are installed.
+Examples:
+  Linux: sudo apt-get install libgrpc++-dev libprotobuf-dev protobuf-compiler
+  macOS: brew install grpc protobuf
+  Windows (MSYS2/UCRT64): pacman -S mingw-w64-ucrt-x86_64-grpc mingw-w64-ucrt-x86_64-protobuf
+
 'pkg-config --cflags --libs grpc++ protobuf' failed.
+See config.log for details.
 --------------------------------------------------------------------])
 ])
 
-AC_SUBST([GRPC_PKG_CXXFLAGS])
-AC_SUBST([GRPC_PKG_LIBS])
+# --- Start of CXXFLAGS Filtering for R CMD check warnings ---
+AC_MSG_CHECKING([raw CXXFLAGS from pkg-config])
+AC_MSG_RESULT([$RAW_PKG_CXXFLAGS])
 
-AC_CONFIG_FILES([src/Makevars:src/Makevars.in])
+# Filter out specific non-portable flags that R CMD check warns about (e.g., on macOS/clang)
+# This list comes from the R CMD check warning itself.
+# Note: If these flags are essential for compiling against library headers without warnings
+# from those headers, removing them might lead to other compilation warnings.
+FILTERED_PKG_CXXFLAGS="$RAW_PKG_CXXFLAGS"
+for flag_to_remove in \
+    -Wno-float-conversion \
+    -Wno-implicit-float-conversion \
+    -Wno-implicit-int-float-conversion \
+    -Wno-unknown-warning-option \
+    -Wno-unused-command-line-argument \
+; do
+    temp_flags=""
+    # Iterate over words in FILTERED_PKG_CXXFLAGS
+    for word in $FILTERED_PKG_CXXFLAGS; do
+        if test "x$word" != "x$flag_to_remove"; then
+            temp_flags="$temp_flags $word" # Add word if it's not the one to remove
+        fi
+    done
+    # Remove leading/trailing space from temp_flags before assigning back
+    FILTERED_PKG_CXXFLAGS=`echo "$temp_flags" | sed -e 's/^ *//' -e 's/ *$//'`
+done
+
+# Clean up multiple spaces that might result from removal (can happen if flags were adjacent)
+FILTERED_PKG_CXXFLAGS=`echo "$FILTERED_PKG_CXXFLAGS" | sed -e 's/  */ /g'`
+
+AC_MSG_CHECKING([filtered CXXFLAGS for R CMD check compatibility])
+AC_MSG_RESULT([$FILTERED_PKG_CXXFLAGS])
+# --- End of CXXFLAGS Filtering ---
+
+# Make the (filtered) CXXFLAGS and (raw) LIBS available for substitution in Makevars.in
+AC_SUBST(GRPC_PKG_CXXFLAGS, ["$FILTERED_PKG_CXXFLAGS"])
+AC_SUBST(GRPC_PKG_LIBS, ["$RAW_PKG_LIBS"]) # LIBS usually don't need this type of filtering
+
+# Define the output files to be generated by configure from .in templates
+AC_CONFIG_FILES([src/Makevars:src/Makevars.in]) # Create src/Makevars from src/Makevars.in
+
+# Finalize the configuration process and generate output files
 AC_OUTPUT
