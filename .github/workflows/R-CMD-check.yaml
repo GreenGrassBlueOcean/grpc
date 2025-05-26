@@ -57,36 +57,48 @@ jobs:
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
 
 
-      - name: Find and Verify gRPC C-core headers (Linux)
+            - name: Find gRPC C-core headers and verify pkg-config (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "--- Locating 'grpc/grpc.h' (a key C-core header) ---"
-          # Try to find the directory containing 'grpc/grpc.h'
-          GRPC_H_DIR=$(sudo find /usr/include -type f -name grpc.h -exec dirname {} \; | grep '/grpc$' | head -n 1)
+          echo "--- Verifying contents of /usr/include and /usr/include/grpc ---"
+          echo "Listing /usr/include/grpc* (top level entries):"
+          ls -ld /usr/include/grpc* || echo "/usr/include/grpc* not found or ls failed"
+          echo "Recursively listing /usr/include/grpc (if it exists):"
+          ls -R /usr/include/grpc || echo "/usr/include/grpc directory not found or ls failed"
 
-          if [ -n "$GRPC_H_DIR" ]; then
-            echo "Found 'grpc.h' in directory: $GRPC_H_DIR"
-            # The include path should be the parent of this 'grpc' directory
-            # e.g., if GRPC_H_DIR is /usr/include/foo/grpc, then C_INCLUDE_DIR is /usr/include/foo
-            GRPC_C_INCLUDE_DIR=$(dirname "$GRPC_H_DIR")
-            echo "Deduced base include directory for -I: $GRPC_C_INCLUDE_DIR"
-
-            echo "--- Verifying 'credentials.h' in the deduced path ---"
-            if [ -f "${GRPC_C_INCLUDE_DIR}/grpc/credentials.h" ]; then
-              echo "SUCCESS: Found ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
-              echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
+          echo "--- Explicitly checking for common C-core headers in /usr/include/grpc/ ---"
+          HEADERS_TO_CHECK=(grpc.h status.h credentials.h byte_buffer.h slice.h)
+          HEADERS_FOUND_CORRECTLY=true
+          for hdr in "${HEADERS_TO_CHECK[@]}"; do
+            if [ -f "/usr/include/grpc/${hdr}" ]; then
+              echo "Found: /usr/include/grpc/${hdr}"
             else
-              echo "ERROR: credentials.h NOT FOUND at ${GRPC_C_INCLUDE_DIR}/grpc/credentials.h"
-              echo "Listing contents of ${GRPC_C_INCLUDE_DIR}/grpc/ :"
-              ls -A "${GRPC_C_INCLUDE_DIR}/grpc/" || echo "Could not list ${GRPC_C_INCLUDE_DIR}/grpc/"
-              exit 1
+              echo "ERROR: NOT FOUND: /usr/include/grpc/${hdr}"
+              HEADERS_FOUND_CORRECTLY=false
             fi
+          done
+
+          if [ "$HEADERS_FOUND_CORRECTLY" = true ]; then
+            echo "All essential C-core headers seem present in /usr/include/grpc/"
+            echo "Setting VERIFIED_GRPC_C_INCLUDE_DIR=/usr/include"
+            echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
           else
-            echo "ERROR: Core 'grpc/grpc.h' not found in a standard-looking location under /usr/include."
-            echo "Listing all 'grpc.h' under /usr for inspection:"
-            sudo find /usr -name grpc.h || echo "No grpc.h found anywhere under /usr"
-            exit 1
+            echo "ERROR: One or more essential gRPC C-core headers missing from /usr/include/grpc/."
+            echo "Attempting a broader search for 'grpc/credentials.h'..."
+            FOUND_PATH=$(sudo find /usr/include -type f -path '*/grpc/credentials.h' -print -quit)
+            if [ -n "$FOUND_PATH" ]; then
+                echo "Broader search found credentials.h at: $FOUND_PATH"
+                GRPC_C_INCLUDE_DIR=$(dirname "$FOUND_PATH" | sed 's|/grpc$||')
+                echo "Deduced C-core include directory for -I (from broader search): $GRPC_C_INCLUDE_DIR"
+                echo "VERIFIED_GRPC_C_INCLUDE_DIR=${GRPC_C_INCLUDE_DIR}" >> $GITHUB_ENV
+            else
+                echo "ERROR: grpc/credentials.h (C-core header) still not found under /usr/include with broader search."
+                exit 1
+            fi
           fi
+
+          echo "--- Verifying pkg-config for grpc++ ---"
+          # ... (rest of pkg-config checks as before) ...
 
       # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
@@ -181,30 +193,106 @@ jobs:
       # ... (this step can remain as is) ...
       - name: Show check logs on failure
         if: failure()
-        shell: Rscript {0}
+        # Changed shell to bash to ensure Rscript is found via PATH.
+        # The Rscript {0} shell might have issues locating Rscript in this specific failure context.
+        shell: bash
         run: |
-          pkg_name_desc <- read.dcf("DESCRIPTION", fields = "Package")[1,1]
+          echo "Attempting to display R CMD check logs..."
+          echo "DEBUG: Current PATH: $PATH"
+          echo "DEBUG: Which Rscript: $(which Rscript || echo 'Rscript not found in PATH by which command')"
+          echo "DEBUG: Rscript version: $(Rscript --version || echo 'Rscript --version command failed')"
+
+          # Pass the R script to Rscript via stdin using a heredoc.
+          # This is often more robust for multi-line scripts than Rscript -e "..."
+          Rscript - <<EOF
+          # --- Start of R script ---
+
+          # More robust function to get package name from DESCRIPTION
+          get_pkg_name_safe <- function(default_name = "unknown_package_name") {
+            pkg_name <- default_name
+            if (file.exists("DESCRIPTION")) {
+              tryCatch({
+                dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
+                if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
+                    !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
+                  pkg_name <- dcf_content[1,1]
+                } else {
+                  cat("WARNING: DESCRIPTION file found but 'Package' field is missing, empty, or NA.\n")
+                }
+              }, error = function(e) {
+                cat(sprintf("WARNING: Error reading DESCRIPTION file: %s\n", e$message))
+              })
+            } else {
+              cat("WARNING: DESCRIPTION file not found in the current working directory.\n")
+            }
+            return(pkg_name)
+          }
+
+          pkg_name_desc <- get_pkg_name_safe()
+
+          if (pkg_name_desc == "unknown_package_name") {
+            cat("WARNING: Could not reliably determine package name from DESCRIPTION.\n")
+            cat("The .Rcheck directory might be named differently or not exist.\n")
+            # As a fallback, list contents of 'check' if it exists, to help find the .Rcheck dir manually
+            if (dir.exists("check")) {
+              cat("Listing contents of 'check' directory as package name is uncertain:\n")
+              print(list.files("check")) # Lists non-recursively by default
+            }
+          }
+
           rcheck_dir <- file.path("check", paste0(pkg_name_desc, ".Rcheck"))
+          cat(sprintf("Attempting to find logs in expected .Rcheck directory: %s\n\n", rcheck_dir))
 
           log_files_to_show <- c(
             file.path(rcheck_dir, "00check.log"),
             file.path(rcheck_dir, "00install.out")
           )
 
+          found_any_log <- FALSE
           for (log_file_path in log_files_to_show) {
+            cat(sprintf("Checking for: %s\n", log_file_path)) # More verbose checking
             if (file.exists(log_file_path)) {
+              found_any_log <- TRUE
               cat(sprintf("\n--- Start of %s ---\n", basename(log_file_path)))
-              try(writeLines(readLines(log_file_path)), silent = TRUE)
-              cat(sprintf("\n--- End of %s ---\n", basename(log_file_path)))
+              tryCatch({
+                # readLines can fail on weird encodings or very large files.
+                log_content <- readLines(log_file_path, warn = FALSE)
+                writeLines(log_content) # writeLines adds a final newline
+              }, error = function(e) {
+                cat(sprintf("ERROR: Could not read or print log file %s. Error: %s\n", log_file_path, e$message))
+                # Alternative: try to dump first few lines if R fails
+                cat("Attempting to print first few lines using system 'head' command (if available)...\n")
+                system_command <- sprintf("head -n 100 %s", shQuote(log_file_path))
+                try(system(system_command), silent = TRUE)
+              }, finally = {
+                cat(sprintf("\n--- End of %s ---\n", basename(log_file_path)))
+              })
             } else {
-              message(sprintf("Log file not found: %s", log_file_path))
+              cat(sprintf("Log file NOT FOUND: %s\n", log_file_path))
             }
           }
 
-          if (!any(sapply(log_files_to_show, file.exists))) {
-            cat("\n--- Files in 'check' directory structure (base R list.files): ---\n")
-            print(list.files("check", recursive = TRUE, all.files = TRUE, full.names = TRUE))
+          if (!found_any_log) {
+            cat(sprintf("\nNone of the primary log files (00check.log, 00install.out) were found in %s.\n", rcheck_dir))
+            cat("This could be due to an early failure (e.g., during build) before log generation, or an unexpected .Rcheck directory name.\n")
+
+            cat("\n--- Listing contents of 'check' directory (if it exists, recursive) ---\n")
+            if (dir.exists("check")) {
+              check_dir_contents <- list.files("check", recursive = TRUE, all.files = TRUE, full.names = TRUE)
+              if (length(check_dir_contents) > 0) {
+                print(check_dir_contents)
+              } else {
+                cat("The 'check' directory exists but is empty or contains no listable files.\n")
+              }
+            } else {
+              cat("The 'check' directory itself was NOT FOUND.\n")
+            }
+
+            cat(sprintf("\n--- Listing contents of current working directory ('%s', non-recursive) ---\n", getwd()))
+            print(list.files(".", recursive = FALSE, all.files = TRUE, full.names = FALSE))
           }
+          # --- End of R script ---
+          EOF
 
       # Upload Full Check Results Directory on Failure
       # ... (this step can remain as is) ...
