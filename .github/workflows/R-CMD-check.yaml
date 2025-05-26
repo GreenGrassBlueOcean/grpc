@@ -18,9 +18,9 @@ jobs:
       fail-fast: false
       matrix:
         config:
-          - {os: ubuntu-22.04,   r: 'release'}
-          - {os: ubuntu-22.04,   r: 'devel', http-user-agent: 'release'}
-          - {os: ubuntu-22.04,   r: 'oldrel-1'}
+          - {os: ubuntu-latest,   r: 'release'} # Using ubuntu-latest, usually 22.04 or 24.04
+          - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
+          - {os: ubuntu-latest,   r: 'oldrel-1'}
           - {os: windows-latest, r: 'release'}
           - {os: macos-latest,   r: 'release'}
 
@@ -28,6 +28,8 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       MSYSTEM: UCRT64
+      # Potential CXXFLAGS for gRPC build if Abseil causes issues with specific compilers
+      # GRPC_BUILD_CXXFLAGS: "-Wno-error=maybe-uninitialized"
 
     steps:
       - name: Checkout repository
@@ -42,99 +44,120 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      - name: Install system dependencies (Linux - Ubuntu 24.04) # Ensure dpkg-dev is here
+      # System Dependencies - Linux (for source build of gRPC)
+      - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            build-essential autoconf autoconf-archive pkg-config \
-            libgrpc-dev libgrpc++-dev protobuf-compiler libprotobuf-dev \
-            dpkg-dev # Ensure dpkg-dev is installed
+            protobuf-compiler libprotobuf-dev dpkg-dev
 
-      - name: Find and Verify gRPC C-core headers (Linux)
+      - name: Build and Install gRPC from Source (Linux)
         if: runner.os == 'Linux'
         run: |
-          echo "--- System Information ---"
-          lsb_release -a
-          apt-cache policy libgrpc-dev || echo "apt-cache policy failed for libgrpc-dev"
+          GRPC_VERSION="v1.72.0" # Using version 1.72.0 as requested
+          echo "Building gRPC version: ${GRPC_VERSION}"
 
-          echo "--- [DIAG] Files listed by libgrpc-dev (dpkg-query -L) ---"
-          sudo dpkg-query -L libgrpc-dev > libgrpc-dev_files.txt
-          echo "Full file list for libgrpc-dev in libgrpc-dev_files.txt artifact."
-          echo "Searching for 'grpc.h' in libgrpc-dev files:"
-          grep "/grpc.h$" libgrpc-dev_files.txt || echo "'grpc.h' not in libgrpc-dev files list."
-          echo "Searching for 'credentials.h' in libgrpc-dev files:"
-          grep "credentials.h" libgrpc-dev_files.txt || echo "'credentials.h' (any path) not in libgrpc-dev files list."
+          sudo apt-get update # Ensure lists are fresh before installing build tools
+          sudo apt-get install -y --no-install-recommends \
+            build-essential autoconf libtool pkg-config cmake clang git
 
-          echo "--- [DIAG] pkg-config output for 'grpc' (C-core) ---"
-          GRPC_CFLAGS_PKGCONFIG=$(pkg-config --cflags grpc || echo "pkg-config --cflags grpc failed")
-          echo "pkg-config --cflags grpc: $GRPC_CFLAGS_PKGCONFIG"
-          echo "pkg-config --libs grpc: $(pkg-config --libs grpc || echo "pkg-config --libs grpc failed")"
+          git clone --depth 1 --branch ${GRPC_VERSION} https://github.com/grpc/grpc /tmp/grpc
+          cd /tmp/grpc
+          git submodule update --init # Crucial for dependencies like Abseil, c-ares etc.
 
-          echo "--- [DIAG] pkg-config output for 'grpc++' ---"
-          GRPCXX_CFLAGS_PKGCONFIG=$(pkg-config --cflags grpc++ || echo "pkg-config --cflags grpc++ failed")
-          echo "pkg-config --cflags grpc++: $GRPCXX_CFLAGS_PKGCONFIG"
-          echo "pkg-config --libs grpc++: $(pkg-config --libs grpc++ || echo "pkg-config --libs grpc++ failed")"
+          mkdir -p cmake/build
+          cd cmake/build
 
-          echo "--- Locating gRPC C-core headers ---"
-          # Attempt to find the C-core credentials.h
-          # We know grpc.h is at /usr/include/grpc/grpc.h
-          # We want to find a credentials.h that would be included as <grpc/credentials.h>
-          # or <grpc/some_subdir/credentials.h>
+          echo "Configuring gRPC with CMake..."
+          # Note: -DgRPC_INSTALL=ON installs both C and C++ components
+          # For specific gRPC versions, some of these _PROVIDER=module flags might need adjustment
+          # or the submodules might build them automatically.
+          # Check gRPC's own build documentation for the specific version if issues arise.
+          cmake ../.. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DBUILD_SHARED_LIBS=ON \
+            -DgRPC_INSTALL=ON \
+            -DgRPC_BUILD_TESTS=OFF \
+            -DgRPC_ABSL_PROVIDER=module \
+            -DgRPC_CARES_PROVIDER=module \
+            -DgRPC_PROTOBUF_PROVIDER=module \
+            -DgRPC_RE2_PROVIDER=module \
+            -DgRPC_SSL_PROVIDER=module \
+            -DgRPC_ZLIB_PROVIDER=module
 
-          C_CORE_CREDENTIALS_H_PATH=""
-          EXPECTED_C_CORE_PATH="/usr/include/grpc/credentials.h"
+          echo "Building gRPC..."
+          make -j$(nproc)
 
-          echo "Searching for C-core credentials.h under /usr/include/grpc/ ..."
-          # Search for any file named credentials.h directly under /usr/include/grpc or its subdirectories
-          # and prioritize one that is NOT under a "grpc++" or "grpcpp" subdirectory
-          FOUND_C_HEADERS=$(sudo find /usr/include/grpc -name credentials.h -type f -print 2>/dev/null | grep -v '/grpc++/\|/grpcpp/')
+          echo "Installing gRPC to /usr/local..."
+          sudo make install
 
-          if [ -n "$FOUND_C_HEADERS" ]; then
-            # If multiple are found (e.g., in impl/, core/, etc.), pick one.
-            # Prefer one that looks like it could be part of the public C API.
-            # This is heuristic. For now, just take the first one found by the filtered find.
-            C_CORE_CREDENTIALS_H_PATH=$(echo "$FOUND_C_HEADERS" | head -n 1)
-            echo "Found potential C-core credentials.h at: $C_CORE_CREDENTIALS_H_PATH"
+          echo "Updating linker cache..."
+          sudo ldconfig
 
-            # Now, determine the correct -I flag for this.
-            # If C_CORE_CREDENTIALS_H_PATH is /usr/include/grpc/foo/bar/credentials.h
-            # and your code does #include <grpc/foo/bar/credentials.h>, then -I/usr/include is fine.
-            # If your code does #include <grpc/credentials.h> and the file is /usr/include/grpc/credentials.h,
-            # then -I/usr/include is fine.
-            # The tricky part is if the file is, say, /usr/include/grpc/internal/credentials.h and you want
-            # to include it as <grpc/credentials.h> -- this would require -I/usr/include/grpc/internal, which is unlikely.
+          echo "Setting GITHUB_ENV variables for subsequent steps..."
+          # VERIFIED_GRPC_C_INCLUDE_DIR for src/Makevars.in if pkg-config doesn't provide -I/usr/local/include
+          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
+          # PKG_CONFIG_PATH for ./configure to find the .pc files from the source build
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
+          echo "gRPC build and install complete."
+        # env:
+          # CXXFLAGS: ${{ env.GRPC_BUILD_CXXFLAGS }} # If needed
 
-            # Let's assume the most common scenario: we need -I/usr/include for includes like
-            # <grpc/something.h> or <grpc/subdir/something.h>
-            PROPOSED_C_INCLUDE_DIR="/usr/include"
-            echo "Using PROPOSED_C_INCLUDE_DIR for C-core: $PROPOSED_C_INCLUDE_DIR"
-            echo "VERIFIED_GRPC_C_INCLUDE_DIR=${PROPOSED_C_INCLUDE_DIR}" >> $GITHUB_ENV
-            echo "VERIFIED_GRPC_C_INCLUDE_DIR set to: ${PROPOSED_C_INCLUDE_DIR}"
+      - name: Verify gRPC C-core headers from Source Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          echo "--- Verifying gRPC headers in /usr/local/include (expected from source build) ---"
+          BASE_INSTALL_DIR="/usr/local"
+          GRPC_C_CORE_BASE_INCLUDE_DIR="${BASE_INSTALL_DIR}/include"
+          GRPC_HEADERS_SUBDIR="${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc"
 
+          if [ -f "${GRPC_HEADERS_SUBDIR}/grpc.h" ]; then
+            echo "Found grpc.h at ${GRPC_HEADERS_SUBDIR}/grpc.h"
           else
-            echo "ERROR: No C-core style 'credentials.h' found under /usr/include/grpc/ (excluding grpc++/grpcpp subdirs)."
-            echo "This means #include <grpc/credentials.h> will likely fail with standard include paths."
-            echo "The C++ version is at /usr/include/grpc++/security/credentials.h."
-            echo "Consider if your C-core code needs to adapt its include, or if a different dev package is needed."
-            # List all credentials.h to see what's available system-wide for gRPC related paths
-            echo "Listing all 'credentials.h' under /usr/include/grpc* for inspection:"
-            sudo find /usr/include/grpc* -name credentials.h -ls || echo "No credentials.h found under /usr/include/grpc* by find"
+            echo "ERROR: grpc.h NOT FOUND at ${GRPC_HEADERS_SUBDIR}/grpc.h"
+            echo "Listing contents of ${GRPC_C_CORE_BASE_INCLUDE_DIR}/ :"
+            ls -A "${GRPC_C_CORE_BASE_INCLUDE_DIR}/" || echo "Could not list ${GRPC_C_CORE_BASE_INCLUDE_DIR}"
             exit 1
           fi
 
-      - name: Upload libgrpc-dev file list # New step to upload diagnostic artifact
-        if: runner.os == 'Linux' && (always() || failure()) # Run even if previous steps fail
-        uses: actions/upload-artifact@v4
-        with:
-          name: libgrpc-dev-files-ubuntu-24.04
-          path: libgrpc-dev_files.txt
+          if [ -f "${GRPC_HEADERS_SUBDIR}/credentials.h" ]; then
+            echo "SUCCESS: Found credentials.h at ${GRPC_HEADERS_SUBDIR}/credentials.h"
+            # VERIFIED_GRPC_C_INCLUDE_DIR is already set by the build step to /usr/local/include
+            # This check confirms the file is there.
+          else
+            echo "ERROR: credentials.h NOT FOUND at ${GRPC_HEADERS_SUBDIR}/credentials.h"
+            echo "Listing contents of ${GRPC_HEADERS_SUBDIR}/ :"
+            ls -A "${GRPC_HEADERS_SUBDIR}/" || echo "Could not list ${GRPC_HEADERS_SUBDIR}"
+            # Also check for the C++ version for completeness
+            if [ -f "${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc++/security/credentials.h" ]; then
+              echo "Note: C++ credentials.h found at ${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc++/security/credentials.h"
+            elif [ -f "${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpcpp/security/credentials.h" ]; then
+              echo "Note: C++ credentials.h found at ${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpcpp/security/credentials.h"
+            fi
+            exit 1
+          fi
 
+          echo "--- Verifying pkg-config can find source-built gRPC ---"
+          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH" # Should be set by previous step's GITHUB_ENV for subsequent steps
+                                                      # For this step, it reflects the PATH at the start of this step
+                                                      # To test effect of GITHUB_ENV, run pkg-config in a *later* step or check configure output
+
+          # Test pkg-config with the path we expect to be set for ./configure
+          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH"
+          echo "Testing with PKG_CONFIG_PATH = $PKG_CONFIG_PATH"
+
+          pkg-config --modversion grpc || { echo "ERROR: pkg-config cannot find grpc (C-core) after source build"; exit 1; }
+          echo "C-core grpc CFLAGS from pkg-config: $(pkg-config --cflags grpc)"
+          pkg-config --modversion grpc++ || { echo "ERROR: pkg-config cannot find grpc++ after source build"; exit 1; }
+          echo "grpc++ CFLAGS from pkg-config: $(pkg-config --cflags grpc++)"
+
+      # System Dependencies - macOS
       - name: Install system dependencies (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
-
 
       # System Dependencies - Windows
       - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
@@ -153,7 +176,7 @@ jobs:
       # Setup R Environment
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
-        id: setup-r-env
+        id: setup-r-env # ID for accessing outputs
         with:
           r-version: ${{ matrix.config.r }}
           http-user-agent: ${{ matrix.config.http-user-agent }}
@@ -171,8 +194,15 @@ jobs:
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
+      # This step is now mostly for macOS, as Linux should use the source-built gRPC
+      # The PKG_CONFIG_PATH for Linux builds (when R CMD check runs ./configure) will have /usr/local/lib/pkgconfig
       - name: Verify pkg-config setup (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
+        # For Linux, PKG_CONFIG_PATH from GITHUB_ENV will be active for subsequent steps,
+        # including the one where R CMD CHECK -> ./configure runs.
+        # This step itself might not see the GITHUB_ENV update to PKG_CONFIG_PATH immediately
+        # unless we re-export it here or ensure this step runs after the GITHUB_ENV is applied.
+        # However, the "Verify gRPC C-core headers from Source Build" step does an explicit export for its test.
         run: |
           echo "Verifying pkg-config for grpc++..."
           pkg-config --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
@@ -183,10 +213,10 @@ jobs:
           echo "grpc CFLAGS: $(pkg-config --cflags grpc)"
           echo "grpc LIBS: $(pkg-config --libs grpc)"
           echo "Verifying pkg-config for protobuf..."
+          # On Linux, protobuf is from system, on macOS from brew
           pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
           echo "protobuf CFLAGS: $(pkg-config --cflags protobuf)"
           echo "protobuf LIBS: $(pkg-config --libs protobuf)"
-
 
       # Install R Package Dependencies
       - name: Install R dependencies
@@ -196,16 +226,19 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          cache: false
-
+          cache: false # Keep false for debugging, set to true later
 
       # Show Session Info
       - name: Show R Session Info
-        shell: Rscript {0}
+        # Use explicit Rscript path if direct call fails
+        shell: bash
         run: |
-          options(width = 100)
-          pkgs <- installed.packages()[, "Version"]
-          sessioninfo::session_info(pkgs, include_base = TRUE)
+          if [ -n "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
+            RSCRIPT_EXEC="${{ steps.setup-r-env.outputs.rscript-path }}"
+          else
+            RSCRIPT_EXEC="Rscript" # Fallback, might fail if PATH is not set
+          fi
+          "$RSCRIPT_EXEC" -e 'options(width = 100); pkgs <- installed.packages()[, "Version"]; sessioninfo::session_info(pkgs, include_base = TRUE)'
 
       # Run R CMD Check
       - name: Check R package
@@ -214,7 +247,7 @@ jobs:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          # error-on: 'warning'
+          # error-on: 'warning' # Enable if desired
           # check-dir: 'check'
 
       # Cleanup potentially locked temp files (Windows)
@@ -225,7 +258,7 @@ jobs:
           echo "Attempting to clean up DumpStack.log.tmp..."
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
 
-            # Display Check Logs on Failure
+      # Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
         shell: bash
@@ -235,7 +268,6 @@ jobs:
           echo "DEBUG: Current PATH: $PATH"
           echo "DEBUG: Which Rscript (direct call): $(which Rscript || echo 'Rscript not found in PATH by which command')"
           echo "DEBUG: Rscript version (direct call): $(Rscript --version || echo 'Rscript --version command failed')"
-          # Corrected line - removed HTML comment
           echo "DEBUG: Rscript version (using setup-r path): $(${<!-- -->{ steps.setup-r-env.outputs.rscript-path }} --version || echo 'Rscript --version with explicit path failed')"
 
           if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
@@ -251,7 +283,6 @@ jobs:
 
           ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
           # --- Start of R script ---
-          # (Your robust R script from before)
           get_pkg_name_safe <- function(default_name = "unknown_package_name") {
             pkg_name <- default_name
             if (file.exists("DESCRIPTION")) {
