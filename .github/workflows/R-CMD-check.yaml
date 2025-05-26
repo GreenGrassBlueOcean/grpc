@@ -105,6 +105,7 @@ jobs:
       # Setup R Environment
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
+        id: setup-r-env
         with:
           r-version: ${{ matrix.config.r }}
           http-user-agent: ${{ matrix.config.http-user-agent }}
@@ -176,16 +177,25 @@ jobs:
           rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
 
       # Display Check Logs on Failure
+     # Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
         shell: bash
         run: |
           echo "Attempting to display R CMD check logs..."
+          echo "DEBUG: Rscript path from setup-r step: ${{ steps.setup-r-env.outputs.rscript-path }}"
           echo "DEBUG: Current PATH: $PATH"
-          echo "DEBUG: Which Rscript: $(which Rscript || echo 'Rscript not found in PATH by which command')"
-          echo "DEBUG: Rscript version: $(Rscript --version || echo 'Rscript --version command failed')"
+          echo "DEBUG: Which Rscript (direct call): $(which Rscript || echo 'Rscript not found in PATH by which command')"
+          echo "DEBUG: Rscript version (direct call): $(Rscript --version || echo 'Rscript --version command failed')"
+          echo "DEBUG: Rscript version (using setup-r path): $(${D{ steps.setup-r-env.outputs.rscript-path }} --version || echo 'Rscript --version with explicit path failed')"
 
-          Rscript - <<EOF
+          if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
+            echo "ERROR: Rscript path from setup-r step is empty. Cannot run R script."
+            exit 1
+          fi
+
+          # Use the explicit path to Rscript from the setup-r step's output
+          ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
           # --- Start of R script ---
 
           get_pkg_name_safe <- function(default_name = "unknown_package_name") {
@@ -249,7 +259,7 @@ jobs:
             }
           }
 
-          if (!found_any_log) {
+          if (!found_any_.log) {
             cat(sprintf("\nNone of the primary log files (00check.log, 00install.out) were found in %s.\n", rcheck_dir))
             cat("This could be due to an early failure (e.g., during build) before log generation, or an unexpected .Rcheck directory name.\n")
 
