@@ -50,30 +50,27 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
-            protobuf-compiler libprotobuf-dev dpkg-dev
+            protobuf-compiler libprotobuf-dev dpkg-dev \
+            libre2-dev
 
       - name: Build and Install gRPC from Source (Linux)
         if: runner.os == 'Linux'
         run: |
-          GRPC_VERSION="v1.72.0" # Using version 1.72.0 as requested
+          GRPC_VERSION="v1.72.0"
           echo "Building gRPC version: ${GRPC_VERSION}"
 
-          sudo apt-get update # Ensure lists are fresh before installing build tools
+          sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             build-essential autoconf libtool pkg-config cmake clang git
 
           git clone --depth 1 --branch ${GRPC_VERSION} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
-          git submodule update --init # Crucial for dependencies like Abseil, c-ares etc.
+          git submodule update --init # This will fetch re2 source among others
 
           mkdir -p cmake/build
           cd cmake/build
 
           echo "Configuring gRPC with CMake..."
-          # Note: -DgRPC_INSTALL=ON installs both C and C++ components
-          # For specific gRPC versions, some of these _PROVIDER=module flags might need adjustment
-          # or the submodules might build them automatically.
-          # Check gRPC's own build documentation for the specific version if issues arise.
           cmake ../.. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -83,7 +80,7 @@ jobs:
             -DgRPC_ABSL_PROVIDER=module \
             -DgRPC_CARES_PROVIDER=module \
             -DgRPC_PROTOBUF_PROVIDER=module \
-            -DgRPC_RE2_PROVIDER=module \
+            # -DgRPC_RE2_PROVIDER=module \  <--- REMOVED to build re2 from submodule
             -DgRPC_SSL_PROVIDER=module \
             -DgRPC_ZLIB_PROVIDER=module
 
@@ -97,13 +94,9 @@ jobs:
           sudo ldconfig
 
           echo "Setting GITHUB_ENV variables for subsequent steps..."
-          # VERIFIED_GRPC_C_INCLUDE_DIR for src/Makevars.in if pkg-config doesn't provide -I/usr/local/include
           echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
-          # PKG_CONFIG_PATH for ./configure to find the .pc files from the source build
           echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
           echo "gRPC build and install complete."
-        # env:
-          # CXXFLAGS: ${{ env.GRPC_BUILD_CXXFLAGS }} # If needed
 
       - name: Verify gRPC C-core headers from Source Build (Linux)
         if: runner.os == 'Linux'

@@ -17,7 +17,7 @@ AX_CXX_COMPILE_STDCXX([17], [noext], [mandatory])
 # If you wanted to pass the exact flags AX_CXX_COMPILE_STDCXX added, it's more complex.
 # For now, relying on R's CXX_STD = CXX17 mechanism is simpler.
 
-# Check for pkg-config tool
+# Check for pkg-config tool 
 PKG_PROG_PKG_CONFIG([0.28]) # Minimum version 0.28 recommended
 
 # Check for the grpc++ and protobuf libraries using pkg-config

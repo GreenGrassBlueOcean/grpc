@@ -1,0 +1,12 @@
+# Auto detect text files and ensure they use LF in the repo
+* text=auto eol=lf
+
+# Explicitly set shell scripts to LF
+*.sh eol=lf
+*.bash eol=lf
+configure eol=lf
+configure.ac eol=lf
+
+# Set Windows-specific files to CRLF if needed (e.g., .bat, .cmd)
+# *.bat eol=crlf
+# *.cmd eol=crlf
