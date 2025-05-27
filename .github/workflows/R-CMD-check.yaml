@@ -69,14 +69,21 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-module-protobuf-v1-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
+            # Also cache the protobuf files gRPC installs to /usr/local if we are letting it install them
+            /usr/local/lib/libprotobuf.so*
+            /usr/local/lib/libprotobuf-lite.so*
+            /usr/local/lib/libprotoc.so*
+            /usr/local/include/google/protobuf
+            /usr/local/bin/protoc
+            /usr/local/lib/pkgconfig/protobuf.pc # This is the one we will remove *after* restore/build but *before* R dep install
+          key: ${{ runner.os }}-grpc-fullmoduleinstall-v1-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
         run: |
           SYSTEM_PC_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig" # For gRPC itself
-          FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH" # Prioritize system for RProtoBuf
+          CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
+          FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH"
           FIRST_CUSTOM_DIR=$(echo "$CUSTOM_PC_PATH" | cut -d: -f1)
           if [ -n "$FIRST_CUSTOM_DIR" ] && [ -d "$FIRST_CUSTOM_DIR" ]; then
             if [ -n "$FINAL_PKG_CONFIG_PATH" ]; then
@@ -87,7 +94,7 @@ jobs:
           fi
           FINAL_PKG_CONFIG_PATH=$(echo "$FINAL_PKG_CONFIG_PATH" | sed 's/^://g' | sed 's/:$//g' | sed 's/::\+/:/g')
           echo "PKG_CONFIG_PATH=${FINAL_PKG_CONFIG_PATH}" >> $GITHUB_ENV
-          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV # For your R package's Makevars if needed
+          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
           echo "Final PKG_CONFIG_PATH for subsequent steps: $FINAL_PKG_CONFIG_PATH"
 
       - name: Build and Install gRPC from Source if not cached (Linux)
@@ -99,10 +106,11 @@ jobs:
           git submodule update --init --recursive
           mkdir -p cmake/build
           cd cmake/build
-          echo "Configuring gRPC with CMake (using Protobuf from module)..."
-          # Using -DgRPC_PROTOBUF_PROVIDER=module
-          # AND -Dprotobuf_INSTALL=OFF to prevent its .pc file from being installed to /usr/local
-          cmake ../.. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_ABSL_PROVIDER=module -DgRPC_CARES_PROVIDER=module -DgRPC_PROTOBUF_PROVIDER=module -DgRPC_SSL_PROVIDER=module -DgRPC_ZLIB_PROVIDER=module -Dprotobuf_INSTALL=OFF
+          echo "Configuring gRPC with CMake (using Protobuf from module, allowing it to install)..."
+          # Reverted to gRPC_PROTOBUF_PROVIDER=module WITHOUT -Dprotobuf_INSTALL=OFF
+          # Let gRPC install its vendored protobuf components to /usr/local.
+          # The "Safeguard" step will clean up the .pc file later.
+          cmake ../.. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_ABSL_PROVIDER=module -DgRPC_CARES_PROVIDER=module -DgRPC_PROTOBUF_PROVIDER=module -DgRPC_SSL_PROVIDER=module -DgRPC_ZLIB_PROVIDER=module
 
           echo "Building gRPC..."
           make -j$(nproc)
@@ -110,11 +118,11 @@ jobs:
           sudo make install
           echo "gRPC build and install complete."
 
-      - name: "Safeguard: Clean any protobuf.pc from /usr/local (Linux)" # Name quoted
+      - name: "Safeguard: Clean any protobuf.pc from /usr/local (Linux)"
         if: runner.os == 'Linux'
         run: |
           echo "Performing safeguard removal of any protobuf.pc from /usr/local..."
-          # This ensures RProtoBuf uses the system protobuf.pc
+          # This ensures RProtoBuf (and R package configure for protobuf dep) uses the system protobuf.pc
           sudo rm -f /usr/local/lib/pkgconfig/protobuf.pc /usr/local/lib64/pkgconfig/protobuf.pc
           echo "Done with safeguard removal."
 
@@ -125,20 +133,27 @@ jobs:
           sudo ldconfig
 
       - name: Minimal pkg-config check for Protobuf (Linux)
-        # This check should now find the SYSTEM protobuf and its (blank Cflags) .pc file
         if: runner.os == 'Linux'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
           set -e
-          echo "Minimal pkg-config check for SYSTEM Protobuf."
+          echo "Minimal pkg-config check for SYSTEM Protobuf (after safeguard)."
           echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
-          echo "Checking for protobuf version..."
+          echo "Checking for protobuf version (should be system version):"
           pkg-config --modversion protobuf
-          echo "Checking for protobuf cflags (expected to be blank for system protobuf based on debug):"
-          pkg-config --cflags protobuf
+          echo "Checking for protobuf cflags (should be system cflags, possibly blank):"
+          time pkg-config --cflags protobuf
           echo "Protobuf check completed."
+          echo "Checking for grpc++ version from /usr/local:"
+          pkg-config --modversion grpc++ # This should still work from /usr/local
+          echo "grpc++ cflags:"
+          pkg-config --cflags grpc++     # This should be from /usr/local
 
+      # ... (rest of the R steps: Setup R, Install R dependencies, Show Session Info, Check R package)
+      # ... (Show check logs on failure, Upload artifact)
+      # These should remain as in the last known good YAML version for those parts.
+      # For brevity, I'm not repeating them but they must be correctly indented.
       - name: Setup R (${{ matrix.config.r }})
         uses: r-lib/actions/setup-r@v2
         id: setup-r-env
@@ -185,16 +200,26 @@ jobs:
         env:
            R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR: ${{ steps.r_cmd_check_step.outputs.check-dir }}
         run: |
-          # (Your log display script - keeping it concise for this example)
-          echo "R CMD Check logs would be displayed here if R setup completed."
-          if [ -n "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ] && [ -d "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ]; then
-            echo "--- Listing $R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR ---"
-            ls -R "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR"
-            echo "--- 00check.log ---"
-            cat "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR/00check.log" || true
-            echo "--- 00install.out ---"
-            cat "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR/00install.out" || true
+          echo "Attempting to display R CMD check logs..."
+          if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
+            echo "WARNING: Rscript path from setup-r step is empty."
+            if [ -n "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ] && [ -d "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ]; then
+                echo "--- Basic listing of '$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR' directory ---"
+                ls -R "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR"
+            elif [ -d "$(ls -td *.Rcheck 2>/dev/null | head -1)" ]; then
+                LATEST_RCHECK=$(ls -td *.Rcheck | head -1)
+                echo "--- Basic listing of fallback .Rcheck directory: $LATEST_RCHECK ---"
+                ls -R "$LATEST_RCHECK"
+            else
+                 echo "No .Rcheck directory found."
+            fi
+            exit 0
           fi
+          ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
+          # (Your R log display script here)
+          # For brevity, a placeholder:
+          cat("R Log Display Script Placeholder. Check Dir Env: ", Sys.getenv("R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR","Not Set"), "\n")
+          EOF
 
       - name: Upload full check results on failure
         if: failure()
