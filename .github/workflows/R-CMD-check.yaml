@@ -213,37 +213,18 @@ jobs:
           echo "--- End Verification ---"
 
 
-      - name: Verify pkg-config setup with diagnostics (Linux/macOS)
+      - name: Minimal pkg-config check for Protobuf (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
-          set -x
           echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
-          echo "Location of pkg-config: $(which pkg-config)"
-          echo "Version of pkg-config: $(pkg-config --version)"
-
-          echo "Verifying pkg-config for grpc++..."
-          time pkg-config --debug --modversion grpc++ || echo "WARNING: pkg-config cannot find grpc++"
-          echo "grpc++ CFLAGS:"
-          time pkg-config --debug --cflags grpc++
-          echo "grpc++ LIBS:"
-          time pkg-config --debug --libs grpc++
-
-          echo "Verifying pkg-config for grpc (C-core)..."
-          time pkg-config --debug --modversion grpc || echo "WARNING: pkg-config cannot find grpc (C-core)"
-          echo "grpc CFLAGS:"
-          time pkg-config --debug --cflags grpc
-          echo "grpc LIBS:"
-          time pkg-config --debug --libs grpc
-
           echo "Verifying pkg-config for protobuf..."
-          time pkg-config --debug --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
-          echo "protobuf CFLAGS:"
-          time pkg-config --debug --cflags protobuf
-          echo "protobuf LIBS:"
-          time pkg-config --debug --libs protobuf
-          set +x
+          time pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
+          echo "Protobuf CFLAGS:"
+          time pkg-config --cflags protobuf
+          # echo "Protobuf LIBS:" # The --libs can be slow; consider if essential here
+          # time pkg-config --libs protobuf
 
       # Install R Package Dependencies
       - name: Install R dependencies
