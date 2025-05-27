@@ -1,15 +1,3 @@
-# .github/workflows/R-CMD-check.yaml
-
-name: R-CMD-check
-
-on:
-  push:
-    branches: [main, master]
-  pull_request:
-    branches: [main, master]
-
-permissions: read-all
-
 jobs:
   R-CMD-check:
     runs-on: ${{ matrix.config.os }}
@@ -72,7 +60,7 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-custombuild-v5-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }} # Incremented cache key
+          key: ${{ runner.os }}-grpc-custombuild-v6-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
@@ -83,8 +71,6 @@ jobs:
           FIRST_CUSTOM_DIR=$(echo "$CUSTOM_PC_PATH" | cut -d: -f1)
           if [ -n "$FIRST_CUSTOM_DIR" ] && [ -d "$FIRST_CUSTOM_DIR" ]; then
             if [ -n "$FINAL_PKG_CONFIG_PATH" ]; then
-              # Ensure CUSTOM_PC_PATH is only added if not already effectively included by SYSTEM_PC_PATH or if distinct
-              # This simple append is usually fine as pkg-config handles duplicates, but precise logic avoids overly long paths.
               FINAL_PKG_CONFIG_PATH="${FINAL_PKG_CONFIG_PATH}:${CUSTOM_PC_PATH}"
             else
               FINAL_PKG_CONFIG_PATH="$CUSTOM_PC_PATH"
@@ -142,14 +128,12 @@ jobs:
           echo "Updating linker cache..."
           sudo ldconfig
 
-      # Line ~129 in your file was indicated here.
-      # Ensure this '-' and all other step '-' are at the exact same indentation.
+      # This is the critical step. ALL '-' for steps must align.
       - name: Minimal pkg-config check for Protobuf (Linux)
         if: runner.os == 'Linux'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
-          # Using a very simple script first to ensure YAML syntax is not the issue
           set -e
           echo "Simplified test for Minimal pkg-config check step."
           echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
