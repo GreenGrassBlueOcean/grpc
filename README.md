@@ -99,72 +99,101 @@ This guide assumes you are using a recent Rtools4x version (e.g., Rtools42, Rtoo
 3.  The R package's `configure` script will use `pkg-config` (provided by Homebrew) to find the installed libraries.
 
 ------------------------------------------------------------------------
+## Linux (Debian/Ubuntu)
 
-#### **Linux (Debian/Ubuntu based distributions)**
+System packages such as **libgrpc-dev** are often outdated, incomplete, or mis-configured.  
+The most reliable approach is to **build gRPC from source**, exactly as done in this package’s GitHub Actions CI.
 
-System-provided `libgrpc-dev` packages on some Linux distributions (e.g., Ubuntu 24.04 with `libgrpc-dev 1.51.1`) have been found to be **missing critical C-core header files** like `grpc/credentials.h`.
+---
 
-**Recommended Method for Linux: Build gRPC from Source**
+### 1  Install core build tools and system **libprotobuf-dev**
 
-This is the most reliable method to ensure a complete and compatible gRPC installation for this R package on Linux. This approach is used in the package's GitHub Actions CI.
+```bash
+sudo apt-get update -y
+sudo apt-get install -y --no-install-recommends \
+    build-essential autoconf libtool pkg-config cmake git clang \
+    protobuf-compiler libprotobuf-dev
+```
+`libprotobuf-dev` is required by RProtoBuf, a dependency of this R packag
 
-1.  **Install Core Build Tools & System Protobuf:** `bash     sudo apt-get update -y     sudo apt-get install -y --no-install-recommends \         build-essential autoconf libtool pkg-config cmake git clang \         protobuf-compiler libprotobuf-dev`
 
-2.  **Clone, Build, and Install gRPC from Source:**
+### 2 Clone, build, and install gRPC
+```bash
+GRPC_VERSION="v1.72.0"   # Adjust if you need a different tag
+cd /tmp                  # Temporary build directory
 
-    ``` bash
-    # Choose a gRPC version. v1.72.0 matches macOS/Windows if available, 
-    # otherwise v1.54.2 is a known stable point. Check latest stable if preferred.
-    GRPC_VERSION="v1.72.0" # Or "v1.54.2" or latest stable tag
+git clone --depth 1 --branch "${GRPC_VERSION}" https://github.com/grpc/grpc
+cd grpc
+git submodule update --init --recursive       # Pull Abseil, c-ares, etc.
 
-    cd /tmp # Or a suitable temporary build directory
-    git clone --depth 1 --branch ${GRPC_VERSION} https://github.com/grpc/grpc
-    cd grpc
-    git submodule update --init # Essential for fetching dependencies like Abseil, c-ares, re2, etc.
+mkdir -p cmake/build && cd cmake/build
 
-    mkdir -p cmake/build
-    cd cmake/build
+cmake ../.. \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr/local \
+  -DBUILD_SHARED_LIBS=ON \
+  -DgRPC_INSTALL=ON \
+  -DgRPC_BUILD_TESTS=OFF \
+  -DgRPC_ABSL_PROVIDER=module \
+  -DgRPC_CARES_PROVIDER=module \
+  -DgRPC_SSL_PROVIDER=module \
+  -DgRPC_ZLIB_PROVIDER=module \
+  -DgRPC_PROTOBUF_PROVIDER=module   # Use gRPC’s vendored Protobuf
 
-    # Configure gRPC build.
-    # -DgRPC_INSTALL=ON installs both C and C++ components.
-    # Omitting specific _PROVIDER=module flags (e.g., for re2, c-ares, zlib, openssl) 
-    # will generally cause gRPC to build these from its third_party submodules,
-    # ensuring version compatibility.
-    # -DgRPC_PROTOBUF_PROVIDER=module uses the system-installed protobuf.
-    cmake ../.. \
-        -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DBUILD_SHARED_LIBS=ON \
-        -DgRPC_INSTALL=ON \
-        -DgRPC_BUILD_TESTS=OFF \
-        -DgRPC_ABSL_PROVIDER=module \
-        -DgRPC_PROTOBUF_PROVIDER=module 
-        # Add other -DgRPC_<DEP>_PROVIDER=module if you have specific system versions you want to use
-        # Otherwise, gRPC will build them from its submodules (e.g., c-ares, re2, zlib, boringssl)
+make -j"$(nproc)"
+sudo make install
+sudo ldconfig                                # Refresh linker cache
+```
+### 3 Remove gRPC’s vendored protobuf.pc
+gRPC installs its own `protobuf.pc` in `/usr/local/lib{,64}/pkgconfig/`.
+That file can override the system one needed by RProtoBuf.
 
-    make -j$(nproc)
-    sudo make install
-    sudo ldconfig # Refresh dynamic linker cache
-    ```
+```bash
+sudo rm -f /usr/local/lib/pkgconfig/protobuf.pc \
+           /usr/local/lib64/pkgconfig/protobuf.pc
+```
+### 4 (Optional) Set PKG_CONFIG_PATH
+Ensure the system paths come first so pkg-config finds the correct files:
 
-    This installs gRPC to `/usr/local`. The R package's `configure` script will use `pkg-config`, which should find the `.pc` files in `/usr/local/lib/pkgconfig` (this path is usually searched by default, or can be added to `PKG_CONFIG_PATH`).
-
-**Alternative for Linux (Using System Packages - Use with EXTREME CAUTION):**
-
-``` bash
-sudo apt-get install libgrpc-dev libgrpc++-dev 
-# Ensure other dependencies like libprotobuf-dev, protobuf-compiler are installed.
+```bash
+export PKG_CONFIG_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/local/lib/pkgconfig"
 ```
 
-Caveat: This method is not recommended due to the high probability of missing headers or incompatible versions on many Linux distributions. If you encounter "file not found" errors for gRPC headers (like grpc/credentials.h), you must switch to building gRPC from source.
+## Alternative: distribution packages (**NOT recommended**)
+
+You *can* install **`libgrpc-dev`** via APT, but be prepared for several issues:
+
+- **Missing headers** (e.g., `grpc/credentials.h`)
+- **Broken or conflicting** `.pc` files
+- **Version mismatches** with **RProtoBuf**
+
+> **Use this approach only with extreme caution.**
+
+---
+
+## Why build from source?
+
+- Guarantees a **complete, compatible** gRPC installation  
+- Mirrors the setup **proven in CI**  
+- Avoids errors such as **“Argument list too long”** caused by conflicting `protobuf.pc` files
+
 
 ### Installing the `grpc` R Package from GitHub
 
 Once all **System Prerequisites** (compiler, gRPC libraries, Protocol Buffer libraries, build tools) for your specific operating system have been successfully installed and configured as detailed above, you can install the `grpc` R package directly from GitHub.
 
-1.  **Ensure `remotes` (or `devtools`) R package is installed:** If you don't have it, install it from CRAN: `R     install.packages("remotes")      # or install.packages("devtools")`
+1.  **Ensure `remotes` (or `devtools`) R package is installed:** If you don't have it, install it from CRAN:
+    ```R
+    install.packages("remotes")      # or install.packages("devtools")
+    ```
 
-2.  **Install `grpc` from GitHub:** In your R console, run: `R     remotes::install_github("GreenGrassBlueOcean/grpc")     # Or, if you prefer using devtools:     # devtools::install_github("GreenGrassBlueOcean/grpc")` This command will download the package source, run the `configure` script (on Linux/macOS), compile the C++ code, and install the package into your R library.
+3.  **Install `grpc` from GitHub:** In your R console, run:
+    ```R
+    remotes::install_github("GreenGrassBlueOcean/grpc")
+    # Or, if you prefer using devtools:
+    # devtools::install_github("GreenGrassBlueOcean/grpc")`
+    ```
+   This command will download the package source, run the `configure` script (on Linux/macOS), compile the C++ code, and install the package into your R library.
 
 **(For Developers Only) Building and Installing from a Local Clone:**
 
