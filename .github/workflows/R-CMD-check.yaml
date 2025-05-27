@@ -150,19 +150,31 @@ jobs:
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
+          set -e # Exit immediately if a command exits with a non-zero status.
           echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
           echo "Verifying pkg-config for SYSTEM protobuf..."
-          FOUND_PROTOBUF_VERSION=$(pkg-config --modversion protobuf) || { echo "ERROR: pkg-config cannot find system protobuf after potential cleanup."; exit 1; }
+
+          echo "Attempting to get system Protobuf version..."
+          FOUND_PROTOBUF_VERSION=$(pkg-config --modversion protobuf)
+          if [ -z "$FOUND_PROTOBUF_VERSION" ]; then
+            echo "ERROR: pkg-config --modversion protobuf failed to return a version."
+            echo "This likely means protobuf was not found by pkg-config."
+            exit 1
+          fi
           echo "System Protobuf version: $FOUND_PROTOBUF_VERSION"
-          echo "System Protobuf CFLAGS:"
+
+          echo "Attempting to get system Protobuf CFLAGS..."
           time pkg-config --cflags protobuf
+
           echo "--- Contents of system protobuf.pc being used ---"
           PROTOBUF_PC_FILE_PATH=$(pkg-config --variable=pcfiledir protobuf)/protobuf.pc
           if [ -f "$PROTOBUF_PC_FILE_PATH" ]; then
             echo "Found protobuf.pc at: $PROTOBUF_PC_FILE_PATH"
             cat "$PROTOBUF_PC_FILE_PATH"
           else
-            echo "WARNING: System protobuf.pc not found at $PROTOBUF_PC_FILE_PATH."
+            echo "WARNING: System protobuf.pc not found at derived path '$PROTOBUF_PC_FILE_PATH'."
+            echo "pkg-config might be using a built-in path or another location."
+            echo "If previous pkg-config commands succeeded, this might be okay."
           fi
           echo "--- End of system protobuf.pc content ---"
 
