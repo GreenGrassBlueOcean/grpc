@@ -10,3 +10,4 @@ autom4te.cache/output.1
 /autom4te.cache
 server_hook.port
 failed_ubuntu_release_log.txt
+failed_r_devel_build.log
