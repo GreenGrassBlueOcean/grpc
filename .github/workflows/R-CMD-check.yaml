@@ -95,15 +95,34 @@ jobs:
       - name: Find Protobuf CMake files (Debug)
         if: runner.os == 'Linux'
         run: |
-          echo "Searching for protobuf-config.cmake and ProtobufConfig.cmake..."
-          sudo find /usr -name "protobuf-config.cmake" -print -quit || echo "protobuf-config.cmake not found in /usr"
-          sudo find /usr -name "ProtobufConfig.cmake" -print -quit || echo "ProtobufConfig.cmake not found in /usr"
-          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
-          echo "Location of protobuf via pkg-config:"
-          pkg-config --variable=pcfiledir protobuf || echo "pkg-config could not find protobuf"
-          echo "CFLAGS for protobuf via pkg-config:"
-          pkg-config --cflags protobuf || echo "pkg-config could not get cflags for protobuf"
+          echo "--- Debugging Protobuf CMake and pkg-config Setup ---"
+          echo "1. Searching for protobuf-config.cmake or ProtobufConfig.cmake in common CMake directories..."
+          find /usr/lib/x86_64-linux-gnu/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
+            echo "  No *protobuf*config.cmake found in /usr/lib/x86_64-linux-gnu/cmake"
+          find /usr/share/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
+            echo "  No *protobuf*config.cmake found in /usr/share/cmake"
+          find /usr/local/lib/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
+            echo "  No *protobuf*config.cmake found in /usr/local/lib/cmake" # Check /usr/local just in case
 
+          echo ""
+          echo "2. PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
+
+          echo ""
+          echo "3. pkg-config details for 'protobuf':"
+          echo "   Version: $(pkg-config --modversion protobuf || echo 'not found')"
+          echo "   Cflags: $(pkg-config --cflags protobuf || echo 'not found')"
+          echo "   Libs: $(pkg-config --libs protobuf || echo 'not found')"
+          echo "   .pc file directory: $(pkg-config --variable=pcfiledir protobuf || echo 'not found')"
+          echo "   Default pkg-config search path: $(pkg-config --variable pc_path pkg-config || echo 'not available')"
+
+          echo ""
+          echo "4. Listing contents of /usr/lib/x86_64-linux-gnu/cmake/ (if it exists)"
+          ls -la /usr/lib/x86_64-linux-gnu/cmake/ || echo "  Directory /usr/lib/x86_64-linux-gnu/cmake/ not found or empty."
+
+          echo ""
+          echo "5. Listing contents of /usr/lib/x86_64-linux-gnu/cmake/protobuf/ (if it exists)"
+          ls -la /usr/lib/x86_64-linux-gnu/cmake/protobuf/ || echo "  Directory /usr/lib/x86_64-linux-gnu/cmake/protobuf/ not found or empty."
+          echo "--- End Debugging ---"
 
       - name: Build and Install gRPC from Source if not cached (Linux)
         if: steps.cache-grpc-build.outputs.cache-hit != 'true' && runner.os == 'Linux'
