@@ -20,8 +20,6 @@ jobs:
           - {os: ubuntu-latest,   r: 'release'}
           - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
           - {os: ubuntu-latest,   r: 'oldrel-1'}
-          # - {os: windows-latest, r: 'release'}
-          # - {os: macos-latest,   r: 'release'}
 
     env:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
@@ -71,14 +69,14 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-custombuild-vFinal-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
+          key: ${{ runner.os }}-grpc-module-protobuf-v1-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
         run: |
           SYSTEM_PC_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
-          CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
-          FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH"
+          CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig" # For gRPC itself
+          FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH" # Prioritize system for RProtoBuf
           FIRST_CUSTOM_DIR=$(echo "$CUSTOM_PC_PATH" | cut -d: -f1)
           if [ -n "$FIRST_CUSTOM_DIR" ] && [ -d "$FIRST_CUSTOM_DIR" ]; then
             if [ -n "$FINAL_PKG_CONFIG_PATH" ]; then
@@ -89,40 +87,8 @@ jobs:
           fi
           FINAL_PKG_CONFIG_PATH=$(echo "$FINAL_PKG_CONFIG_PATH" | sed 's/^://g' | sed 's/:$//g' | sed 's/::\+/:/g')
           echo "PKG_CONFIG_PATH=${FINAL_PKG_CONFIG_PATH}" >> $GITHUB_ENV
-          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
+          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV # For your R package's Makevars if needed
           echo "Final PKG_CONFIG_PATH for subsequent steps: $FINAL_PKG_CONFIG_PATH"
-
-      - name: Find Protobuf CMake files (Debug)
-        if: runner.os == 'Linux'
-        run: |
-          echo "--- Debugging Protobuf CMake and pkg-config Setup ---"
-          echo "1. Searching for protobuf-config.cmake or ProtobufConfig.cmake in common CMake directories..."
-          find /usr/lib/x86_64-linux-gnu/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
-            echo "  No *protobuf*config.cmake found in /usr/lib/x86_64-linux-gnu/cmake"
-          find /usr/share/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
-            echo "  No *protobuf*config.cmake found in /usr/share/cmake"
-          find /usr/local/lib/cmake -name "*protobuf*config.cmake" -print -quit 2>/dev/null || \
-            echo "  No *protobuf*config.cmake found in /usr/local/lib/cmake" # Check /usr/local just in case
-
-          echo ""
-          echo "2. PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
-
-          echo ""
-          echo "3. pkg-config details for 'protobuf':"
-          echo "   Version: $(pkg-config --modversion protobuf || echo 'not found')"
-          echo "   Cflags: $(pkg-config --cflags protobuf || echo 'not found')"
-          echo "   Libs: $(pkg-config --libs protobuf || echo 'not found')"
-          echo "   .pc file directory: $(pkg-config --variable=pcfiledir protobuf || echo 'not found')"
-          echo "   Default pkg-config search path: $(pkg-config --variable pc_path pkg-config || echo 'not available')"
-
-          echo ""
-          echo "4. Listing contents of /usr/lib/x86_64-linux-gnu/cmake/ (if it exists)"
-          ls -la /usr/lib/x86_64-linux-gnu/cmake/ || echo "  Directory /usr/lib/x86_64-linux-gnu/cmake/ not found or empty."
-
-          echo ""
-          echo "5. Listing contents of /usr/lib/x86_64-linux-gnu/cmake/protobuf/ (if it exists)"
-          ls -la /usr/lib/x86_64-linux-gnu/cmake/protobuf/ || echo "  Directory /usr/lib/x86_64-linux-gnu/cmake/protobuf/ not found or empty."
-          echo "--- End Debugging ---"
 
       - name: Build and Install gRPC from Source if not cached (Linux)
         if: steps.cache-grpc-build.outputs.cache-hit != 'true' && runner.os == 'Linux'
@@ -133,26 +99,10 @@ jobs:
           git submodule update --init --recursive
           mkdir -p cmake/build
           cd cmake/build
-          echo "Configuring gRPC with CMake to use system Protobuf..."
-
-          # Common system installation prefixes for libraries on Linux.
-          # CMake typically searches these, but we can be explicit.
-          # /usr contains /usr/lib, /usr/include, /usr/lib/x86_64-linux-gnu/cmake, etc.
-          # The protobuf-config.cmake should be discoverable if CMAKE_PREFIX_PATH includes /usr
-          # or specifically /usr/lib/x86_64-linux-gnu or its parent.
-
-          cmake ../.. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DCMAKE_PREFIX_PATH="/usr;/usr/lib/x86_64-linux-gnu" \ # Force CMake to search these prefixes
-            -DBUILD_SHARED_LIBS=ON \
-            -DgRPC_INSTALL=ON \
-            -DgRPC_BUILD_TESTS=OFF \
-            -DgRPC_ABSL_PROVIDER=module \
-            -DgRPC_CARES_PROVIDER=module \
-            -DgRPC_PROTOBUF_PROVIDER=package \
-            -DgRPC_SSL_PROVIDER=module \
-            -DgRPC_ZLIB_PROVIDER=module
+          echo "Configuring gRPC with CMake (using Protobuf from module)..."
+          # Using -DgRPC_PROTOBUF_PROVIDER=module
+          # AND -Dprotobuf_INSTALL=OFF to prevent its .pc file from being installed to /usr/local
+          cmake ../.. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_ABSL_PROVIDER=module -DgRPC_CARES_PROVIDER=module -DgRPC_PROTOBUF_PROVIDER=module -DgRPC_SSL_PROVIDER=module -DgRPC_ZLIB_PROVIDER=module -Dprotobuf_INSTALL=OFF
 
           echo "Building gRPC..."
           make -j$(nproc)
@@ -160,18 +110,13 @@ jobs:
           sudo make install
           echo "gRPC build and install complete."
 
-      - name: "Safeguard: Clean problematic protobuf.pc from /usr/local (Linux)" # Quoted for safety
+      - name: "Safeguard: Clean any protobuf.pc from /usr/local (Linux)" # Name quoted
         if: runner.os == 'Linux'
         run: |
-          echo "Performing safeguard removal of protobuf.pc from /usr/local..."
-          if [ -f /usr/local/lib/pkgconfig/protobuf.pc ]; then
-            echo "Found /usr/local/lib/pkgconfig/protobuf.pc. Removing."
-            sudo rm -f /usr/local/lib/pkgconfig/protobuf.pc
-          fi
-          if [ -f /usr/local/lib64/pkgconfig/protobuf.pc ]; then
-            echo "Found /usr/local/lib64/pkgconfig/protobuf.pc. Removing."
-            sudo rm -f /usr/local/lib64/pkgconfig/protobuf.pc
-          fi
+          echo "Performing safeguard removal of any protobuf.pc from /usr/local..."
+          # This ensures RProtoBuf uses the system protobuf.pc
+          sudo rm -f /usr/local/lib/pkgconfig/protobuf.pc /usr/local/lib64/pkgconfig/protobuf.pc
+          echo "Done with safeguard removal."
 
       - name: Update linker cache after gRPC install/restore (Linux)
         if: runner.os == 'Linux'
@@ -180,16 +125,17 @@ jobs:
           sudo ldconfig
 
       - name: Minimal pkg-config check for Protobuf (Linux)
+        # This check should now find the SYSTEM protobuf and its (blank Cflags) .pc file
         if: runner.os == 'Linux'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
           set -e
-          echo "Simplified test for Minimal pkg-config check step."
+          echo "Minimal pkg-config check for SYSTEM Protobuf."
           echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
           echo "Checking for protobuf version..."
           pkg-config --modversion protobuf
-          echo "Checking for protobuf cflags..."
+          echo "Checking for protobuf cflags (expected to be blank for system protobuf based on debug):"
           pkg-config --cflags protobuf
           echo "Protobuf check completed."
 
@@ -239,70 +185,16 @@ jobs:
         env:
            R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR: ${{ steps.r_cmd_check_step.outputs.check-dir }}
         run: |
-          echo "Attempting to display R CMD check logs..."
-          if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
-            echo "WARNING: Rscript path from setup-r step is empty. This is expected if failure occurred before R setup."
-            echo "Cannot run R script to display detailed R CMD check logs."
-            echo "Check logs from the preceding failing step for the primary error."
-            if [ -n "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ] && [ -d "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ]; then
-                echo "--- Basic listing of '$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR' directory ---"
-                ls -R "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR"
-            elif [ -d "$(ls -td *.Rcheck 2>/dev/null | head -1)" ]; then
-                LATEST_RCHECK=$(ls -td *.Rcheck | head -1)
-                echo "--- Basic listing of fallback .Rcheck directory: $LATEST_RCHECK ---"
-                ls -R "$LATEST_RCHECK"
-            else
-                 echo "No .Rcheck directory found by common methods."
-            fi
-            exit 0
+          # (Your log display script - keeping it concise for this example)
+          echo "R CMD Check logs would be displayed here if R setup completed."
+          if [ -n "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ] && [ -d "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR" ]; then
+            echo "--- Listing $R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR ---"
+            ls -R "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR"
+            echo "--- 00check.log ---"
+            cat "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR/00check.log" || true
+            echo "--- 00install.out ---"
+            cat "$R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR/00install.out" || true
           fi
-          ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
-          # --- Start of R script ---
-          pkg_check_dir_output <- Sys.getenv("R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR", unset = NA_character_)
-          get_pkg_name_safe <- function(default_name = "unknown_package_name") {
-            pkg_name <- default_name
-            if (file.exists("DESCRIPTION")) {
-              tryCatch({
-                dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
-                if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
-                    !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
-                  pkg_name <- dcf_content[1,1]
-                } else { cat("WARNING: DESCRIPTION 'Package' field issue.\\n") }
-              }, error = function(e) { cat(sprintf("WARNING: Error reading DESCRIPTION: %s\\n", e$message)) })
-            } else { cat("WARNING: DESCRIPTION file not found.\\n") }
-            return(pkg_name)
-          }
-          pkg_check_dir <- NA_character_
-          if (!is.na(pkg_check_dir_output) && nzchar(pkg_check_dir_output) && dir.exists(pkg_check_dir_output)) {
-             pkg_check_dir <- pkg_check_dir_output
-          } else {
-            pkg_name_desc <- get_pkg_name_safe()
-            if (pkg_name_desc != "unknown_package_name") {
-              potential_check_dir <- file.path(getwd(), paste0(pkg_name_desc, ".Rcheck"))
-              if (dir.exists(potential_check_dir)) { pkg_check_dir <- potential_check_dir }
-            }
-          }
-          if (!is.na(pkg_check_dir) && dir.exists(pkg_check_dir)) {
-            cat(sprintf("Found R CMD check directory: %s\\n\\n", pkg_check_dir))
-            log_files_to_show <- c(file.path(pkg_check_dir, "00check.log"), file.path(pkg_check_dir, "00install.out"))
-            all_found <- FALSE
-            for(log_file in log_files_to_show) {
-              if(file.exists(log_file)) {
-                cat(sprintf("\\n\\n--- Contents of %s ---\\n", log_file))
-                tryCatch({ writeLines(readLines(log_file)) }, error = function(e) { cat(sprintf("ERROR reading %s: %s\\n", log_file, e$message)) })
-                all_found <- TRUE
-              } else { cat(sprintf("\\n\\n--- %s not found ---\\n", log_file)) }
-            }
-            if (!all_found) {
-              cat("\\nStandard R CMD check logs not found in", pkg_check_dir, "\\nListing all files in .Rcheck dir:\\n")
-              print(list.files(pkg_check_dir, recursive = TRUE, all.files = TRUE))
-            }
-          } else {
-            cat("R CMD check directory not found or determined. Listing current dir:\\n")
-            print(list.files(getwd()))
-          }
-          # --- End of R script ---
-          EOF
 
       - name: Upload full check results on failure
         if: failure()
