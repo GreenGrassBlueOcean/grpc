@@ -99,24 +99,28 @@ jobs:
           echo "Cache not found or miss for gRPC. Building gRPC version: ${{ env.GRPC_VERSION }}"
           git clone --depth 1 --branch ${{ env.GRPC_VERSION }} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
+          # When using system protobuf, submodules for protobuf are not strictly needed for the build itself,
+          # but git submodule update --init --recursive is generally safe.
           git submodule update --init --recursive
           mkdir -p cmake/build
           cd cmake/build
-          echo "Configuring gRPC with CMake..."
+          echo "Configuring gRPC with CMake to use system Protobuf..."
           cmake ../.. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
             -DBUILD_SHARED_LIBS=ON \
             -DgRPC_INSTALL=ON \
             -DgRPC_BUILD_TESTS=OFF \
-            -DgRPC_ABSL_PROVIDER=module \
-            -DgRPC_CARES_PROVIDER=module \
-            -DgRPC_PROTOBUF_PROVIDER=module \
-            -DgRPC_SSL_PROVIDER=module \
-            -DgRPC_ZLIB_PROVIDER=module \
-            -Dprotobuf_INSTALL=OFF
+            -DgRPC_ABSL_PROVIDER=module \ # Keep this as module if Abseil from gRPC is preferred
+            -DgRPC_CARES_PROVIDER=module \ # Keep this as module
+            -DgRPC_PROTOBUF_PROVIDER=package \ # <-- KEY CHANGE: Use system Protobuf
+            -DgRPC_SSL_PROVIDER=module \   # Keep this as module
+            -DgRPC_ZLIB_PROVIDER=module    # Keep this as module
+            # -Dprotobuf_INSTALL=OFF # This is NOT NEEDED if gRPC_PROTOBUF_PROVIDER=package
+
           echo "Building gRPC..."
           make -j$(nproc)
+
           echo "Installing gRPC to /usr/local..."
           sudo make install
           echo "gRPC build and install complete."
