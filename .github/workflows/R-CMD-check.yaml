@@ -21,7 +21,6 @@ jobs:
           - {os: ubuntu-latest,   r: 'release'}
           - {os: ubuntu-latest,   r: 'devel', http-user-agent: 'release'}
           - {os: ubuntu-latest,   r: 'oldrel-1'}
-          # Re-enable Windows/macOS once Linux is stable
           # - {os: windows-latest, r: 'release'}
           # - {os: macos-latest,   r: 'release'}
 
@@ -73,7 +72,7 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-custombuild-v4-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }} # Incremented cache key
+          key: ${{ runner.os }}-grpc-custombuild-v5-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }} # Incremented cache key
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
@@ -81,18 +80,16 @@ jobs:
           SYSTEM_PC_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
           FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH"
-          # Check if the first directory in CUSTOM_PC_PATH exists before appending
-          # This avoids adding paths like "/usr/local/lib/pkgconfig" if it doesn't exist
-          # and also handles if CUSTOM_PC_PATH is empty.
           FIRST_CUSTOM_DIR=$(echo "$CUSTOM_PC_PATH" | cut -d: -f1)
           if [ -n "$FIRST_CUSTOM_DIR" ] && [ -d "$FIRST_CUSTOM_DIR" ]; then
             if [ -n "$FINAL_PKG_CONFIG_PATH" ]; then
+              # Ensure CUSTOM_PC_PATH is only added if not already effectively included by SYSTEM_PC_PATH or if distinct
+              # This simple append is usually fine as pkg-config handles duplicates, but precise logic avoids overly long paths.
               FINAL_PKG_CONFIG_PATH="${FINAL_PKG_CONFIG_PATH}:${CUSTOM_PC_PATH}"
             else
               FINAL_PKG_CONFIG_PATH="$CUSTOM_PC_PATH"
             fi
           fi
-          # Clean up potential leading/trailing/double colons
           FINAL_PKG_CONFIG_PATH=$(echo "$FINAL_PKG_CONFIG_PATH" | sed 's/^://g' | sed 's/:$//g' | sed 's/::\+/:/g')
           echo "PKG_CONFIG_PATH=${FINAL_PKG_CONFIG_PATH}" >> $GITHUB_ENV
           echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
@@ -126,7 +123,7 @@ jobs:
           sudo make install
           echo "gRPC build and install complete."
 
-      - name: Safeguard: Clean problematic protobuf pc from usr local (Linux)
+      - name: Safeguard: Clean problematic protobuf.pc from /usr/local (Linux)
         if: runner.os == 'Linux'
         run: |
           echo "Performing safeguard removal of protobuf.pc from /usr/local..."
@@ -145,35 +142,22 @@ jobs:
           echo "Updating linker cache..."
           sudo ldconfig
 
-      # THIS IS THE STEP WHERE LINE 129 IS LIKELY LOCATED
+      # Line ~129 in your file was indicated here.
+      # Ensure this '-' and all other step '-' are at the exact same indentation.
       - name: Minimal pkg-config check for Protobuf (Linux)
         if: runner.os == 'Linux'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
-          # Exit immediately if a command exits with a non-zero status.
+          # Using a very simple script first to ensure YAML syntax is not the issue
           set -e
-          echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
-          echo "Verifying pkg-config for SYSTEM protobuf..."
-          echo "Attempting to get system Protobuf version..."
-          FOUND_PROTOBUF_VERSION=$(pkg-config --modversion protobuf)
-          if [ -z "$FOUND_PROTOBUF_VERSION" ]; then
-            echo "ERROR: pkg-config --modversion protobuf failed to return a version for system protobuf."
-            exit 1
-          fi
-          echo "System Protobuf version: $FOUND_PROTOBUF_VERSION"
-          echo "Attempting to get system Protobuf CFLAGS..."
-          time pkg-config --cflags protobuf
-          echo "--- Contents of system protobuf.pc being used ---"
-          PROTOBUF_PC_FILE_PATH=$(pkg-config --variable=pcfiledir protobuf)/protobuf.pc
-          if [ -n "$PROTOBUF_PC_FILE_PATH" ] && [ -f "$PROTOBUF_PC_FILE_PATH" ]; then
-            echo "Found protobuf.pc at: $PROTOBUF_PC_FILE_PATH"
-            cat "$PROTOBUF_PC_FILE_PATH"
-          else
-            echo "WARNING: System protobuf.pc not found at derived path '$PROTOBUF_PC_FILE_PATH'."
-            echo "pkg-config might be using a built-in path or another location."
-          fi
-          echo "--- End of system protobuf.pc content ---"
+          echo "Simplified test for Minimal pkg-config check step."
+          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
+          echo "Checking for protobuf version..."
+          pkg-config --modversion protobuf
+          echo "Checking for protobuf cflags..."
+          pkg-config --cflags protobuf
+          echo "Protobuf check completed."
 
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -210,7 +194,7 @@ jobs:
       - name: Show check logs on failure
         if: failure()
         shell: bash
-        env: # Pass the check-dir output to the R script via an env var
+        env:
            R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR: ${{ steps.r_cmd_check_step.outputs.check-dir }}
         run: |
           echo "Attempting to display R CMD check logs..."
