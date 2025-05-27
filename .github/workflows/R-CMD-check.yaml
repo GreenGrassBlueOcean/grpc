@@ -1,3 +1,15 @@
+# .github/workflows/R-CMD-check.yaml
+
+name: R-CMD-check # Top-level key, no indentation
+
+on: # Top-level key, no indentation
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions: read-all # Top-level key, no indentation (or part of 'jobs' if specific permissions are needed per job)
+
 jobs:
   R-CMD-check:
     runs-on: ${{ matrix.config.os }}
