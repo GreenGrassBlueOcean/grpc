@@ -28,6 +28,7 @@ jobs:
       GITHUB_PAT: ${{ secrets.GITHUB_TOKEN }}
       R_KEEP_PKG_SOURCE: yes
       MSYSTEM: UCRT64
+      GRPC_VERSION: "v1.72.0" # Define gRPC version for cache key and build script
 
     steps:
       - name: Checkout repository
@@ -42,26 +43,64 @@ jobs:
           if [ -f configure ]; then chmod +x configure; fi
           if [ -d tools ]; then find tools -type f -exec chmod +x {} \;; fi
 
-      # System Dependencies - Linux (for source build of gRPC)
-      - name: Install system dependencies (Linux)
+      # System Dependencies - Linux (common)
+      - name: Install common system dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y
           sudo apt-get install -y --no-install-recommends \
             protobuf-compiler libprotobuf-dev dpkg-dev \
-            libre2-dev # Added libre2-dev, but we will build gRPC's re2 from submodule
+            libre2-dev \
+            build-essential autoconf libtool pkg-config cmake clang git # For gRPC build if needed
 
-      - name: Build and Install gRPC from Source (Linux)
+      # Cache and Restore gRPC build for Linux
+      - name: Cache locally built gRPC (Linux)
+        if: runner.os == 'Linux'
+        id: cache-grpc-build
+        uses: actions/cache@v4
+        with:
+          path: |
+            /usr/local/lib/libgrpc.so*
+            /usr/local/lib/libgrpc_unsecure.so*
+            /usr/local/lib/libgrpc++.so*
+            /usr/local/lib/libgrpc++_unsecure.so*
+            /usr/local/lib/libgpr.so*
+            /usr/local/lib/libaddress_sorting.so*
+            /usr/local/lib/pkgconfig/grpc.pc
+            /usr/local/lib/pkgconfig/grpc_unsecure.pc
+            /usr/local/lib/pkgconfig/grpc++.pc
+            /usr/local/lib/pkgconfig/grpc++_unsecure.pc
+            /usr/local/include/grpc
+            /usr/local/include/grpc++
+            /usr/local/bin/grpc_cpp_plugin
+            # Add other specific gRPC related files/small directories if necessary
+            # For Abseil libraries if they are also placed in /usr/local/lib and are large
+            /usr/local/lib/libabsl_*
+          key: ${{ runner.os }}-grpc-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
+
+      - name: Set PKG_CONFIG_PATH and other ENV VARS from potential cache (Linux)
         if: runner.os == 'Linux'
         run: |
-          GRPC_VERSION="v1.72.0"
-          echo "Building gRPC version: ${GRPC_VERSION}"
+          echo "Setting GITHUB_ENV variables for subsequent steps (pre-gRPC build/restore)..."
+          # This ensures PKG_CONFIG_PATH is set even if gRPC is restored from cache
+          CACHED_PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
 
-          sudo apt-get update # Ensure lists are fresh
-          sudo apt-get install -y --no-install-recommends \
-            build-essential autoconf libtool pkg-config cmake clang git
+          # Correctly append to existing PKG_CONFIG_PATH if it's already set by a previous step
+          # (though in this workflow, this is likely the first place it's substantially defined for gRPC)
+          if [ -n "$PKG_CONFIG_PATH_EXISTING" ]; then # Use a different temp var to avoid self-reference issues
+            echo "PKG_CONFIG_PATH=${CACHED_PKG_CONFIG_PATH}:${PKG_CONFIG_PATH_EXISTING}" >> $GITHUB_ENV
+          else
+            echo "PKG_CONFIG_PATH=${CACHED_PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          fi
+          # VERIFIED_GRPC_C_INCLUDE_DIR is primarily for your R package build if it needs it
+          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
 
-          git clone --depth 1 --branch ${GRPC_VERSION} https://github.com/grpc/grpc /tmp/grpc
+      - name: Build and Install gRPC from Source if not cached (Linux)
+        if: steps.cache-grpc-build.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: |
+          echo "Cache not found or miss for gRPC. Building gRPC version: ${{ env.GRPC_VERSION }}"
+
+          git clone --depth 1 --branch ${{ env.GRPC_VERSION }} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
           git submodule update --init
 
@@ -69,8 +108,6 @@ jobs:
           cd cmake/build
 
           echo "Configuring gRPC with CMake..."
-          # Note: -DgRPC_RE2_PROVIDER=module is intentionally omitted below
-          # to let gRPC build re2 from its bundled submodule for better compatibility.
           cmake ../.. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -82,57 +119,55 @@ jobs:
             -DgRPC_PROTOBUF_PROVIDER=module \
             -DgRPC_SSL_PROVIDER=module \
             -DgRPC_ZLIB_PROVIDER=module
-            # No backslash on the last argument line for cmake
 
           echo "Building gRPC..."
           make -j$(nproc)
 
           echo "Installing gRPC to /usr/local..."
           sudo make install
+          echo "gRPC build and install complete."
+          # PKG_CONFIG_PATH and VERIFIED_GRPC_C_INCLUDE_DIR should be picked up from the GITHUB_ENV
+          # set in the "Set PKG_CONFIG_PATH..." step.
 
+      - name: Update linker cache after gRPC install/restore (Linux)
+        if: runner.os == 'Linux'
+        run: |
           echo "Updating linker cache..."
           sudo ldconfig
 
-          echo "Setting GITHUB_ENV variables for subsequent steps..."
-          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH" >> $GITHUB_ENV
-          echo "gRPC build and install complete."
-
-      - name: Verify gRPC C-core headers from Source Build (Linux)
+      - name: Verify gRPC C-core headers (Linux)
         if: runner.os == 'Linux'
+        env: # Make sure PKG_CONFIG_PATH set in GITHUB_ENV is available here
+          PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
+          VERIFIED_GRPC_C_INCLUDE_DIR: ${{ env.VERIFIED_GRPC_C_INCLUDE_DIR }}
         run: |
-          echo "--- Verifying gRPC headers in /usr/local/include (expected from source build) ---"
-          BASE_INSTALL_DIR="/usr/local"
-          GRPC_C_CORE_BASE_INCLUDE_DIR="${BASE_INSTALL_DIR}/include"
+          echo "--- Verifying gRPC headers in $VERIFIED_GRPC_C_INCLUDE_DIR ---"
+          BASE_INSTALL_DIR="/usr/local" # Redundant if VERIFIED_GRPC_C_INCLUDE_DIR is used consistently
+          GRPC_C_CORE_BASE_INCLUDE_DIR="${VERIFIED_GRPC_C_INCLUDE_DIR}" # Use env var
           GRPC_HEADERS_SUBDIR="${GRPC_C_CORE_BASE_INCLUDE_DIR}/grpc"
 
           if [ -f "${GRPC_HEADERS_SUBDIR}/grpc.h" ]; then
             echo "Found grpc.h at ${GRPC_HEADERS_SUBDIR}/grpc.h"
           else
             echo "ERROR: grpc.h NOT FOUND at ${GRPC_HEADERS_SUBDIR}/grpc.h"
-            echo "Listing contents of ${GRPC_C_CORE_BASE_INCLUDE_DIR}/ :"
             ls -A "${GRPC_C_CORE_BASE_INCLUDE_DIR}/" || echo "Could not list ${GRPC_C_CORE_BASE_INCLUDE_DIR}"
             exit 1
           fi
-
           if [ -f "${GRPC_HEADERS_SUBDIR}/credentials.h" ]; then
             echo "SUCCESS: Found credentials.h at ${GRPC_HEADERS_SUBDIR}/credentials.h"
           else
             echo "ERROR: credentials.h NOT FOUND at ${GRPC_HEADERS_SUBDIR}/credentials.h"
-            echo "Listing contents of ${GRPC_HEADERS_SUBDIR}/ :"
             ls -A "${GRPC_HEADERS_SUBDIR}/" || echo "Could not list ${GRPC_HEADERS_SUBDIR}"
-            # ... (rest of error handling) ...
             exit 1
           fi
 
-          echo "--- Verifying pkg-config can find source-built gRPC ---"
-          export PKG_CONFIG_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig:$PKG_CONFIG_PATH"
-          echo "Testing with PKG_CONFIG_PATH = $PKG_CONFIG_PATH"
+          echo "--- Verifying pkg-config can find gRPC (source build or cache) ---"
+          echo "Current PKG_CONFIG_PATH for this verification: $PKG_CONFIG_PATH"
 
-          time pkg-config --modversion grpc || { echo "ERROR: pkg-config cannot find grpc (C-core) after source build"; exit 1; }
+          time pkg-config --modversion grpc || { echo "ERROR: pkg-config cannot find grpc (C-core)"; exit 1; }
           echo "C-core grpc CFLAGS from pkg-config:"
           time pkg-config --cflags grpc
-          time pkg-config --modversion grpc++ || { echo "ERROR: pkg-config cannot find grpc++ after source build"; exit 1; }
+          time pkg-config --modversion grpc++ || { echo "ERROR: pkg-config cannot find grpc++"; exit 1; }
           echo "grpc++ CFLAGS from pkg-config:"
           time pkg-config --cflags grpc++
 
@@ -177,14 +212,13 @@ jobs:
           which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
           echo "--- End Verification ---"
 
-      - name: Verify pkg-config setup (Linux/macOS)
-        # Renamed for clarity from the log output, was effectively:
-        # Run echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
+
+      - name: Verify pkg-config setup with diagnostics (Linux/macOS)
         if: runner.os == 'Linux' || runner.os == 'macOS'
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
-          set -x # Echo all commands for detailed debugging
+          set -x
           echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
           echo "Location of pkg-config: $(which pkg-config)"
           echo "Version of pkg-config: $(pkg-config --version)"
@@ -219,7 +253,7 @@ jobs:
             any::rcmdcheck
             any::sessioninfo
             any::desc
-          cache: false # Explicitly false as per original, consider if true is desired for speed
+          cache: false # Keeping this as false from your original
 
       # Show Session Info
       - name: Show R Session Info
@@ -235,18 +269,13 @@ jobs:
       # Run R CMD Check
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
-        env:
+        env: # PKG_CONFIG_PATH should be available from GITHUB_ENV
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         with:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          # Consider adding a timeout-minutes for this specific action if you want it to fail faster than 6h
-          # timeout-minutes: 240 # e.g., 4 hours for R CMD check step itself
-
-      # ... (rest of your YAML: Cleanup, Show check logs on failure, Upload artifact) ...
-      # The "Show check logs on failure" R script is a good debugging tool.
-      # No changes needed to those parts based on the current primary issue.
+          timeout-minutes: 350 # Approx 5h 50m, to ensure it completes or fails cleanly before overall job timeout
 
       # Cleanup potentially locked temp files (Windows)
       - name: Cleanup potentially locked temp files (Windows)
@@ -262,20 +291,55 @@ jobs:
         shell: bash
         run: |
           echo "Attempting to display R CMD check logs..."
-          # ... (rest of your existing R script for showing logs) ...
-          # Ensure this R script block is correctly indented under the run: |
+          echo "DEBUG: Rscript path from setup-r step: ${{ steps.setup-r-env.outputs.rscript-path }}"
+          echo "DEBUG: Current PATH: $PATH"
+          echo "DEBUG: Which Rscript (direct call): $(which Rscript || echo 'Rscript not found in PATH by which command')"
+          echo "DEBUG: Rscript version (direct call): $(Rscript --version || echo 'Rscript --version command failed')"
+          echo "DEBUG: Rscript version (using setup-r path): $(${steps.setup-r-env.outputs.rscript-path} --version || echo 'Rscript --version with explicit path failed')"
+
           if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
             echo "WARNING: Rscript path from setup-r step is empty. This is expected if failure occurred before R setup."
-            # ... (rest of your existing R script for showing logs) ...
+            echo "Cannot run R script to display detailed R CMD check logs."
+            echo "Check logs from the preceding failing step for the primary error."
+            if [ -d "check" ]; then
+                echo "--- Basic listing of 'check' directory (if it exists) ---"
+                ls -R check
+            fi
             exit 0
           fi
 
           ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
           # --- Start of R script ---
+          # (Your full R script for analyzing check logs from previous responses goes here)
+          # For brevity, I'm not repeating the entire R script, but ensure you have it here.
+          # Example start:
           get_pkg_name_safe <- function(default_name = "unknown_package_name") {
-            # ... (your existing R script content) ...
+            pkg_name <- default_name
+            if (file.exists("DESCRIPTION")) {
+              tryCatch({
+                dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
+                if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
+                    !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
+                  pkg_name <- dcf_content[1,1]
+                } else {
+                  cat("WARNING: DESCRIPTION file found but 'Package' field is missing, empty, or NA.\n")
+                }
+              }, error = function(e) {
+                cat(sprintf("WARNING: Error reading DESCRIPTION file: %s\n", e$message))
+              })
+            } else {
+              cat("WARNING: DESCRIPTION file not found in the current working directory.\n")
+            }
+            return(pkg_name)
           }
-          # ... (rest of your existing R script content) ...
+          pkg_name_desc <- get_pkg_name_safe()
+          rcheck_dir <- file.path("check", paste0(pkg_name_desc, ".Rcheck"))
+          cat(sprintf("Attempting to find logs in expected .Rcheck directory: %s\n\n", rcheck_dir))
+          log_files_to_show <- c(
+            file.path(rcheck_dir, "00check.log"),
+            file.path(rcheck_dir, "00install.out")
+          )
+          # ... (ensure your full R log display script is here)
           # --- End of R script ---
           EOF
 
