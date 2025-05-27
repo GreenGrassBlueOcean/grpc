@@ -215,8 +215,8 @@ jobs:
           echo "--- End Verification ---"
 
 
-      - name: Minimal pkg-config check for Protobuf (Linux/macOS)
-        if: runner.os == 'Linux' || runner.os == 'macOS'
+      - name: Minimal pkg-config check for Protobuf and Abseil (Linux) # Modified name for clarity
+        if: runner.os == 'Linux' # <<< IMPORTANT: Linux only for this deep dive
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
         run: |
@@ -224,36 +224,42 @@ jobs:
           echo "Verifying pkg-config for protobuf..."
           time pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
 
-          echo "--- Contents of protobuf.pc ---"
+          echo "--- Contents of protobuf.pc (Linux) ---"
           PROTOBUF_PC_FILE_PATH=$(pkg-config --variable=pcfiledir protobuf)/protobuf.pc
           if [ -f "$PROTOBUF_PC_FILE_PATH" ]; then
             echo "Found protobuf.pc at: $PROTOBUF_PC_FILE_PATH"
             cat "$PROTOBUF_PC_FILE_PATH"
           else
-            echo "ERROR: protobuf.pc not found at expected location after pkg-config --variable call."
-            echo "Attempting to find protobuf.pc in PKG_CONFIG_PATH:"
-            IFS=:
-            for path_component in $PKG_CONFIG_PATH; do
-              if [ -f "$path_component/protobuf.pc" ]; then
-                echo "Found in: $path_component/protobuf.pc"
-                cat "$path_component/protobuf.pc"
-                break
-              fi
-            done
-            # List contents of pkgconfig directories for further debugging
-            echo "Listing /usr/local/lib/pkgconfig:"
-            ls -la /usr/local/lib/pkgconfig || echo "  (directory not found or empty)"
-            echo "Listing /usr/local/lib64/pkgconfig:"
-            ls -la /usr/local/lib64/pkgconfig || echo "  (directory not found or empty)"
-            echo "Listing /usr/lib/x86_64-linux-gnu/pkgconfig (system default):" # Common on Ubuntu
-            ls -la /usr/lib/x86_64-linux-gnu/pkgconfig || echo "  (directory not found or empty)"
+            echo "ERROR: protobuf.pc not found via --variable=pcfiledir."
+            # Fallback find logic as before if needed...
           fi
-          echo "--- End of protobuf.pc content ---"
+          echo "--- End of protobuf.pc content (Linux) ---"
 
-          echo "Protobuf CFLAGS:"
+          echo "" # Spacer
+          echo "--- Verifying an Abseil component (e.g., absl_base) ---"
+          ABSL_COMPONENT_TO_CHECK="absl_base" # Or another one if this doesn't exist
+          echo "Checking for $ABSL_COMPONENT_TO_CHECK via pkg-config..."
+          time pkg-config --modversion "$ABSL_COMPONENT_TO_CHECK" || echo "WARNING: pkg-config cannot find $ABSL_COMPONENT_TO_CHECK. It might not be a direct .pc file or uses a different name."
+
+          ABSL_PC_FILE_PATH=$(pkg-config --variable=pcfiledir "$ABSL_COMPONENT_TO_CHECK" 2>/dev/null)/$ABSL_COMPONENT_TO_CHECK.pc
+          echo "Attempting to locate $ABSL_COMPONENT_TO_CHECK.pc at: $ABSL_PC_FILE_PATH"
+
+          if [ -f "$ABSL_PC_FILE_PATH" ]; then
+            echo "--- Contents of $ABSL_COMPONENT_TO_CHECK.pc (Linux) ---"
+            cat "$ABSL_PC_FILE_PATH"
+            echo "--- End of $ABSL_COMPONENT_TO_CHECK.pc content (Linux) ---"
+            echo "$ABSL_COMPONENT_TO_CHECK CFLAGS:"
+            time pkg-config --cflags "$ABSL_COMPONENT_TO_CHECK"
+          else
+            echo "WARNING: $ABSL_COMPONENT_TO_CHECK.pc not found at $ABSL_PC_FILE_PATH. Listing pkgconfig dir."
+            ls -la /usr/local/lib/pkgconfig | grep absl || echo "No absl files found in /usr/local/lib/pkgconfig"
+          fi
+
+          echo "" # Spacer
+          echo "--- Now attempting the slow Protobuf CFLAGS command ---"
+          echo "Protobuf CFLAGS (this might be very slow on Linux):"
           time pkg-config --cflags protobuf
-          # echo "Protobuf LIBS:" # The --libs can be slow; consider if essential here
-          # time pkg-config --libs protobuf
+
 
       # Install R Package Dependencies
       - name: Install R dependencies
