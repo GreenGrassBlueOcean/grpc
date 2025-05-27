@@ -109,7 +109,7 @@ jobs:
           sudo make install
           echo "gRPC build and install complete."
 
-      - name: Safeguard: Clean problematic protobuf.pc from /usr/local (Linux)
+      - name: Safeguard - Clean problematic protobuf.pc from /usr/local (Linux)
         if: runner.os == 'Linux'
         run: |
           echo "Performing safeguard removal of protobuf.pc from /usr/local..."
