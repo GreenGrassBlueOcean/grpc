@@ -1,14 +1,13 @@
 # .github/workflows/R-CMD-check.yaml
+name: R-CMD-check
 
-name: R-CMD-check # Top-level key, no indentation
-
-on: # Top-level key, no indentation
+on:
   push:
     branches: [main, master]
   pull_request:
     branches: [main, master]
 
-permissions: read-all # Top-level key, no indentation (or part of 'jobs' if specific permissions are needed per job)
+permissions: read-all
 
 jobs:
   R-CMD-check:
@@ -72,7 +71,7 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-custombuild-v6-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
+          key: ${{ runner.os }}-grpc-custombuild-vFinal-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
@@ -99,33 +98,19 @@ jobs:
           echo "Cache not found or miss for gRPC. Building gRPC version: ${{ env.GRPC_VERSION }}"
           git clone --depth 1 --branch ${{ env.GRPC_VERSION }} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
-          # When using system protobuf, submodules for protobuf are not strictly needed for the build itself,
-          # but git submodule update --init --recursive is generally safe.
           git submodule update --init --recursive
           mkdir -p cmake/build
           cd cmake/build
           echo "Configuring gRPC with CMake to use system Protobuf..."
-          cmake ../.. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX=/usr/local \
-            -DBUILD_SHARED_LIBS=ON \
-            -DgRPC_INSTALL=ON \
-            -DgRPC_BUILD_TESTS=OFF \
-            -DgRPC_ABSL_PROVIDER=module \ # Keep this as module if Abseil from gRPC is preferred
-            -DgRPC_CARES_PROVIDER=module \ # Keep this as module
-            -DgRPC_PROTOBUF_PROVIDER=package \ # <-- KEY CHANGE: Use system Protobuf
-            -DgRPC_SSL_PROVIDER=module \   # Keep this as module
-            -DgRPC_ZLIB_PROVIDER=module    # Keep this as module
-            # -Dprotobuf_INSTALL=OFF # This is NOT NEEDED if gRPC_PROTOBUF_PROVIDER=package
+          cmake ../.. -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_SHARED_LIBS=ON -DgRPC_INSTALL=ON -DgRPC_BUILD_TESTS=OFF -DgRPC_ABSL_PROVIDER=module -DgRPC_CARES_PROVIDER=module -DgRPC_PROTOBUF_PROVIDER=package -DgRPC_SSL_PROVIDER=module -DgRPC_ZLIB_PROVIDER=module
 
           echo "Building gRPC..."
           make -j$(nproc)
-
           echo "Installing gRPC to /usr/local..."
           sudo make install
           echo "gRPC build and install complete."
 
-      - name: Safeguard - Clean problematic protobuf.pc from /usr/local (Linux)
+      - name: "Safeguard: Clean problematic protobuf.pc from /usr/local (Linux)" # Quoted for safety
         if: runner.os == 'Linux'
         run: |
           echo "Performing safeguard removal of protobuf.pc from /usr/local..."
@@ -144,7 +129,6 @@ jobs:
           echo "Updating linker cache..."
           sudo ldconfig
 
-      # This is the critical step. ALL '-' for steps must align.
       - name: Minimal pkg-config check for Protobuf (Linux)
         if: runner.os == 'Linux'
         env:
@@ -158,6 +142,14 @@ jobs:
           echo "Checking for protobuf cflags..."
           pkg-config --cflags protobuf
           echo "Protobuf check completed."
+
+      - name: Setup R (${{ matrix.config.r }})
+        uses: r-lib/actions/setup-r@v2
+        id: setup-r-env
+        with:
+          r-version: ${{ matrix.config.r }}
+          http-user-agent: ${{ matrix.config.http-user-agent }}
+          use-public-rspm: true
 
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
@@ -225,9 +217,9 @@ jobs:
                 if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
                     !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
                   pkg_name <- dcf_content[1,1]
-                } else { cat("WARNING: DESCRIPTION 'Package' field issue.\n") }
-              }, error = function(e) { cat(sprintf("WARNING: Error reading DESCRIPTION: %s\n", e$message)) })
-            } else { cat("WARNING: DESCRIPTION file not found.\n") }
+                } else { cat("WARNING: DESCRIPTION 'Package' field issue.\\n") }
+              }, error = function(e) { cat(sprintf("WARNING: Error reading DESCRIPTION: %s\\n", e$message)) })
+            } else { cat("WARNING: DESCRIPTION file not found.\\n") }
             return(pkg_name)
           }
           pkg_check_dir <- NA_character_
@@ -241,28 +233,27 @@ jobs:
             }
           }
           if (!is.na(pkg_check_dir) && dir.exists(pkg_check_dir)) {
-            cat(sprintf("Found R CMD check directory: %s\n\n", pkg_check_dir))
+            cat(sprintf("Found R CMD check directory: %s\\n\\n", pkg_check_dir))
             log_files_to_show <- c(file.path(pkg_check_dir, "00check.log"), file.path(pkg_check_dir, "00install.out"))
             all_found <- FALSE
             for(log_file in log_files_to_show) {
               if(file.exists(log_file)) {
-                cat(sprintf("\n\n--- Contents of %s ---\n", log_file))
-                tryCatch({ writeLines(readLines(log_file)) }, error = function(e) { cat(sprintf("ERROR reading %s: %s\n", log_file, e$message)) })
+                cat(sprintf("\\n\\n--- Contents of %s ---\\n", log_file))
+                tryCatch({ writeLines(readLines(log_file)) }, error = function(e) { cat(sprintf("ERROR reading %s: %s\\n", log_file, e$message)) })
                 all_found <- TRUE
-              } else { cat(sprintf("\n\n--- %s not found ---\n", log_file)) }
+              } else { cat(sprintf("\\n\\n--- %s not found ---\\n", log_file)) }
             }
             if (!all_found) {
-              cat("\nStandard R CMD check logs not found in", pkg_check_dir, "\nListing all files in .Rcheck dir:\n")
+              cat("\\nStandard R CMD check logs not found in", pkg_check_dir, "\\nListing all files in .Rcheck dir:\\n")
               print(list.files(pkg_check_dir, recursive = TRUE, all.files = TRUE))
             }
           } else {
-            cat("R CMD check directory not found or determined. Listing current dir:\n")
+            cat("R CMD check directory not found or determined. Listing current dir:\\n")
             print(list.files(getwd()))
           }
           # --- End of R script ---
           EOF
 
-      # Upload Full Check Results Directory on Failure
       - name: Upload full check results on failure
         if: failure()
         uses: actions/upload-artifact@v4
