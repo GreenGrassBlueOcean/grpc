@@ -92,6 +92,19 @@ jobs:
           echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
           echo "Final PKG_CONFIG_PATH for subsequent steps: $FINAL_PKG_CONFIG_PATH"
 
+      - name: Find Protobuf CMake files (Debug)
+        if: runner.os == 'Linux'
+        run: |
+          echo "Searching for protobuf-config.cmake and ProtobufConfig.cmake..."
+          sudo find /usr -name "protobuf-config.cmake" -print -quit || echo "protobuf-config.cmake not found in /usr"
+          sudo find /usr -name "ProtobufConfig.cmake" -print -quit || echo "ProtobufConfig.cmake not found in /usr"
+          echo "PKG_CONFIG_PATH is: $PKG_CONFIG_PATH"
+          echo "Location of protobuf via pkg-config:"
+          pkg-config --variable=pcfiledir protobuf || echo "pkg-config could not find protobuf"
+          echo "CFLAGS for protobuf via pkg-config:"
+          pkg-config --cflags protobuf || echo "pkg-config could not get cflags for protobuf"
+
+
       - name: Build and Install gRPC from Source if not cached (Linux)
         if: steps.cache-grpc-build.outputs.cache-hit != 'true' && runner.os == 'Linux'
         run: |
@@ -103,36 +116,24 @@ jobs:
           cd cmake/build
           echo "Configuring gRPC with CMake to use system Protobuf..."
 
-          # Attempt to find the system Protobuf CMake directory
-          # This path is common on Ubuntu for libprotobuf-dev
-          SYSTEM_PROTOBUF_CMAKE_DIR="/usr/lib/x86_64-linux-gnu/cmake/protobuf"
+          # Common system installation prefixes for libraries on Linux.
+          # CMake typically searches these, but we can be explicit.
+          # /usr contains /usr/lib, /usr/include, /usr/lib/x86_64-linux-gnu/cmake, etc.
+          # The protobuf-config.cmake should be discoverable if CMAKE_PREFIX_PATH includes /usr
+          # or specifically /usr/lib/x86_64-linux-gnu or its parent.
 
-          # Construct CMake arguments
-          CMAKE_ARGS=(
-            -DCMAKE_BUILD_TYPE=Release
-            -DCMAKE_INSTALL_PREFIX=/usr/local
-            -DBUILD_SHARED_LIBS=ON
-            -DgRPC_INSTALL=ON
-            -DgRPC_BUILD_TESTS=OFF
-            -DgRPC_ABSL_PROVIDER=module  # Assuming Abseil from gRPC submodule is desired
-            -DgRPC_CARES_PROVIDER=module # Assuming c-ares from gRPC submodule is desired
-            -DgRPC_PROTOBUF_PROVIDER=package # Use system Protobuf
-            -DgRPC_SSL_PROVIDER=module   # Assuming OpenSSL from gRPC submodule is desired (or system if available and configured)
-            -DgRPC_ZLIB_PROVIDER=module   # Assuming zlib from gRPC submodule is desired
-          )
-
-          # Add Protobuf_DIR hint if the directory exists
-          if [ -d "$SYSTEM_PROTOBUF_CMAKE_DIR" ]; then
-            echo "Found system Protobuf CMake directory at $SYSTEM_PROTOBUF_CMAKE_DIR, adding -DProtobuf_DIR"
-            CMAKE_ARGS+=("-DProtobuf_DIR=$SYSTEM_PROTOBUF_CMAKE_DIR")
-          else
-            echo "WARNING: System Protobuf CMake directory $SYSTEM_PROTOBUF_CMAKE_DIR not found. Relying on CMake's default search paths."
-            # Alternatively, you could add to CMAKE_PREFIX_PATH, e.g.:
-            # CMAKE_ARGS+=("-DCMAKE_PREFIX_PATH=/usr") # /usr should contain lib/cmake, include, etc.
-          fi
-
-          # Run cmake with all arguments
-          cmake ../.. "${CMAKE_ARGS[@]}"
+          cmake ../.. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local \
+            -DCMAKE_PREFIX_PATH="/usr;/usr/lib/x86_64-linux-gnu" \ # Force CMake to search these prefixes
+            -DBUILD_SHARED_LIBS=ON \
+            -DgRPC_INSTALL=ON \
+            -DgRPC_BUILD_TESTS=OFF \
+            -DgRPC_ABSL_PROVIDER=module \
+            -DgRPC_CARES_PROVIDER=module \
+            -DgRPC_PROTOBUF_PROVIDER=package \
+            -DgRPC_SSL_PROVIDER=module \
+            -DgRPC_ZLIB_PROVIDER=module
 
           echo "Building gRPC..."
           make -j$(nproc)
