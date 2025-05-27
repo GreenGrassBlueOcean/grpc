@@ -76,6 +76,8 @@ jobs:
             # Add other specific gRPC related files/small directories if necessary
             # For Abseil libraries if they are also placed in /usr/local/lib and are large
             /usr/local/lib/libabsl_*
+            /usr/local/lib/pkgconfig/protobuf.pc # Explicitly cache protobuf.pc if it's in /usr/local
+            /usr/local/lib64/pkgconfig/protobuf.pc # And if it's in /usr/local/lib64
           key: ${{ runner.os }}-grpc-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH and other ENV VARS from potential cache (Linux)
@@ -221,6 +223,33 @@ jobs:
           echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
           echo "Verifying pkg-config for protobuf..."
           time pkg-config --modversion protobuf || { echo "ERROR: pkg-config cannot find protobuf"; exit 1; }
+
+          echo "--- Contents of protobuf.pc ---"
+          PROTOBUF_PC_FILE_PATH=$(pkg-config --variable=pcfiledir protobuf)/protobuf.pc
+          if [ -f "$PROTOBUF_PC_FILE_PATH" ]; then
+            echo "Found protobuf.pc at: $PROTOBUF_PC_FILE_PATH"
+            cat "$PROTOBUF_PC_FILE_PATH"
+          else
+            echo "ERROR: protobuf.pc not found at expected location after pkg-config --variable call."
+            echo "Attempting to find protobuf.pc in PKG_CONFIG_PATH:"
+            IFS=:
+            for path_component in $PKG_CONFIG_PATH; do
+              if [ -f "$path_component/protobuf.pc" ]; then
+                echo "Found in: $path_component/protobuf.pc"
+                cat "$path_component/protobuf.pc"
+                break
+              fi
+            done
+            # List contents of pkgconfig directories for further debugging
+            echo "Listing /usr/local/lib/pkgconfig:"
+            ls -la /usr/local/lib/pkgconfig || echo "  (directory not found or empty)"
+            echo "Listing /usr/local/lib64/pkgconfig:"
+            ls -la /usr/local/lib64/pkgconfig || echo "  (directory not found or empty)"
+            echo "Listing /usr/lib/x86_64-linux-gnu/pkgconfig (system default):" # Common on Ubuntu
+            ls -la /usr/lib/x86_64-linux-gnu/pkgconfig || echo "  (directory not found or empty)"
+          fi
+          echo "--- End of protobuf.pc content ---"
+
           echo "Protobuf CFLAGS:"
           time pkg-config --cflags protobuf
           # echo "Protobuf LIBS:" # The --libs can be slow; consider if essential here
