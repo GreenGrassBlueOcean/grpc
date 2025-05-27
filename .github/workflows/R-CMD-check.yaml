@@ -75,27 +75,21 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-            # We *want* to avoid caching a protobuf.pc from /usr/local if gRPC puts a bad one there.
-            # So, do not include /usr/local/lib/pkgconfig/protobuf.pc in the cache path.
-          key: ${{ runner.os }}-grpc-custombuild-v2-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }} # Modified cache key
+          key: ${{ runner.os }}-grpc-custombuild-v2-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
         run: |
-          # Prioritize system paths for dependencies like RProtoBuf,
-          # then /usr/local for our custom gRPC build.
           SYSTEM_PC_PATH="/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
           CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
 
-          # Check if PKG_CONFIG_PATH is already set and append to it if necessary
-          # However, for this specific use case, we want to ensure system paths are first.
           FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH"
-          if [[ ":$FINAL_PKG_CONFIG_PATH:" != *":$CUSTOM_PC_PATH:"* ]]; then # Avoid duplicates
+          if [[ ":$FINAL_PKG_CONFIG_PATH:" != *":$CUSTOM_PC_PATH:"* ]]; then
              FINAL_PKG_CONFIG_PATH="${FINAL_PKG_CONFIG_PATH}:${CUSTOM_PC_PATH}"
           fi
 
           echo "PKG_CONFIG_PATH=${FINAL_PKG_CONFIG_PATH}" >> $GITHUB_ENV
-          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV # For your R package's Makevars
+          echo "VERIFIED_GRPC_C_INCLUDE_DIR=/usr/local/include" >> $GITHUB_ENV
           echo "Final PKG_CONFIG_PATH for subsequent steps: $FINAL_PKG_CONFIG_PATH"
 
       - name: Build and Install gRPC from Source if not cached (Linux)
@@ -104,7 +98,7 @@ jobs:
           echo "Cache not found or miss for gRPC. Building gRPC version: ${{ env.GRPC_VERSION }}"
           git clone --depth 1 --branch ${{ env.GRPC_VERSION }} https://github.com/grpc/grpc /tmp/grpc
           cd /tmp/grpc
-          git submodule update --init --recursive # Ensure protobuf submodule is definitely there
+          git submodule update --init --recursive
 
           mkdir -p cmake/build
           cd cmake/build
@@ -121,23 +115,15 @@ jobs:
             -DgRPC_PROTOBUF_PROVIDER=module \
             -DgRPC_SSL_PROVIDER=module \
             -DgRPC_ZLIB_PROVIDER=module \
-            # THIS IS THE KEY ATTEMPT for Strategy 1:
-            # Tell the Protobuf sub-build (used when gRPC_PROTOBUF_PROVIDER=module)
-            # NOT to install its targets (like .pc files, headers that might conflict).
-            # This option comes from Protobuf's own CMakeLists.txt.
-            -Dprotobuf_INSTALL=OFF
+            -Dprotobuf_INSTALL=OFF # Attempt to prevent vendored protobuf's .pc install
 
           echo "Building gRPC..."
           make -j$(nproc)
 
           echo "Installing gRPC to /usr/local..."
-          sudo make install # This should now install gRPC and its direct .pc files,
-                            # but hopefully not the conflicting protobuf.pc from the submodule.
+          sudo make install
           echo "gRPC build and install complete."
 
-      # This step might be redundant if -Dprotobuf_INSTALL=OFF works as expected.
-      # Kept as a strong safeguard for now. If -Dprotobuf_INSTALL=OFF is confirmed effective,
-      # this explicit removal can be removed later.
       - name: Safeguard: Clean problematic protobuf.pc from /usr/local (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -157,7 +143,7 @@ jobs:
           echo "Updating linker cache..."
           sudo ldconfig
 
-      # Minimal pkg-config check should now use SYSTEM protobuf
+      # This is line 136 now
       - name: Minimal pkg-config check for Protobuf (Linux)
         if: runner.os == 'Linux'
         env:
@@ -165,20 +151,22 @@ jobs:
         run: |
           echo "Current PKG_CONFIG_PATH for this step: $PKG_CONFIG_PATH"
           echo "Verifying pkg-config for SYSTEM protobuf..."
+          # The next line was where the error was, line 141 in the previous version
           FOUND_PROTOBUF_VERSION=$(pkg-config --modversion protobuf) || { echo "ERROR: pkg-config cannot find system protobuf after potential cleanup."; exit 1; }
           echo "System Protobuf version: $FOUND_PROTOBUF_VERSION"
           echo "System Protobuf CFLAGS:"
-          time pkg-config --cflags protobuf # Should be short and simple
+          time pkg-config --cflags protobuf
           echo "--- Contents of system protobuf.pc being used ---"
           PROTOBUF_PC_FILE_PATH=$(pkg-config --variable=pcfiledir protobuf)/protobuf.pc
           if [ -f "$PROTOBUF_PC_FILE_PATH" ]; then
             echo "Found protobuf.pc at: $PROTOBUF_PC_FILE_PATH"
             cat "$PROTOBUF_PC_FILE_PATH"
+          else
+            echo "WARNING: System protobuf.pc not found at $PROTOBUF_PC_FILE_PATH (pkg-config might be finding it elsewhere or using built-in). This might be okay if previous checks passed."
           fi
           echo "--- End of system protobuf.pc content ---"
 
       # Install R Package Dependencies
-      # RProtoBuf should now find the system libprotobuf-dev via its .pc file.
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         env:
@@ -190,8 +178,16 @@ jobs:
             any::desc
           cache: false
 
-      # ... (Show R Session Info, Check R package, etc. as before) ...
-      # Ensure 'Check R package' step also uses env: PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
+      - name: Show R Session Info
+        shell: bash
+        run: |
+          if [ -n "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
+            RSCRIPT_EXEC="${{ steps.setup-r-env.outputs.rscript-path }}"
+          else
+            RSCRIPT_EXEC="Rscript"
+          fi
+          "$RSCRIPT_EXEC" -e 'options(width = 100); pkgs <- installed.packages()[, "Version"]; sessioninfo::session_info(pkgs, include_base = TRUE)'
+
       - name: Check R package
         uses: r-lib/actions/check-r-package@v2
         env:
@@ -200,4 +196,109 @@ jobs:
           upload-snapshots: true
           build_args: 'c("--no-manual","--compact-vignettes=gs+qpdf")'
           args: 'c("--no-manual", "--as-cran")'
-          timeout: 350m # Corrected
+          timeout: 350m
+
+      # ... (rest of file, e.g., Windows/macOS specific steps, failure steps)
+      # Ensure Windows and macOS steps are re-enabled or correctly handled
+      # if they were temporarily commented out.
+
+      # System Dependencies - macOS (ensure this is present if you uncomment macOS matrix)
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install grpc protobuf pkg-config autoconf automake autoconf-archive libtool
+
+      # System Dependencies - Windows (ensure this is present if you uncomment Windows matrix)
+      - name: Setup MSYS2 and install gRPC/Protobuf/Build Tools (Windows)
+        if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: ${{ env.MSYSTEM }}
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-grpc
+            mingw-w64-ucrt-x86_64-protobuf
+            mingw-w64-ucrt-x86_64-pkg-config
+            mingw-w64-ucrt-x86_64-make
+            mingw-w64-ucrt-x86_64-toolchain
+
+      - name: Verification of tools in PATH (Windows) # Ensure this step is correctly placed after MSYS2 setup
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          echo "--- Verifying Tools in PATH after MSYS2 & R setup ---"
+          echo "PATH: $PATH"
+          which pkg-config || { echo "ERROR: pkg-config NOT FOUND"; exit 1; }
+          which make || { echo "ERROR: make NOT FOUND"; exit 1; }
+          which g++ || { echo "ERROR: g++ NOT FOUND"; exit 1; }
+          echo "--- End Verification ---"
+
+      # Cleanup potentially locked temp files (Windows)
+      - name: Cleanup potentially locked temp files (Windows)
+        if: runner.os == 'Windows' && failure()
+        shell: bash
+        run: |
+          echo "Attempting to clean up DumpStack.log.tmp..."
+          rm -f /d/DumpStack.log.tmp || echo "DumpStack.log.tmp not found or could not be removed."
+
+      # Display Check Logs on Failure
+      - name: Show check logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          echo "Attempting to display R CMD check logs..."
+          # ... (rest of your log display script) ...
+          # (ensure the Rscript part for log display is complete)
+          if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
+            echo "WARNING: Rscript path from setup-r step is empty. This is expected if failure occurred before R setup."
+            # ...
+            exit 0
+          fi
+          ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
+          # --- Start of R script ---
+          # (Your full R script for analyzing check logs from previous responses goes here)
+          get_pkg_name_safe <- function(default_name = "unknown_package_name") {
+            pkg_name <- default_name
+            if (file.exists("DESCRIPTION")) {
+              tryCatch({
+                dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
+                if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
+                    !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
+                  pkg_name <- dcf_content[1,1]
+                } else {
+                  cat("WARNING: DESCRIPTION file found but 'Package' field is missing, empty, or NA.\n")
+                }
+              }, error = function(e) {
+                cat(sprintf("WARNING: Error reading DESCRIPTION file: %s\n", e$message))
+              })
+            } else {
+              cat("WARNING: DESCRIPTION file not found in the current working directory.\n")
+            }
+            return(pkg_name)
+          }
+          pkg_name_desc <- get_pkg_name_safe()
+          rcheck_dir <- file.path("check", paste0(pkg_name_desc, ".Rcheck"))
+          cat(sprintf("Attempting to find logs in expected .Rcheck directory: %s\n\n", rcheck_dir))
+          log_files_to_show <- c(
+            file.path(rcheck_dir, "00check.log"),
+            file.path(rcheck_dir, "00install.out")
+          )
+          # ... (ensure your full R log display script is here) ...
+          for(log_file in log_files_to_show) {
+            if(file.exists(log_file)) {
+              cat(sprintf("\n\n--- Contents of %s ---\n", log_file))
+              cat(readLines(log_file), sep = "\n")
+            } else {
+              cat(sprintf("\n\n--- %s not found ---\n", log_file))
+            }
+          }
+          # --- End of R script ---
+          EOF
+
+      # Upload Full Check Results Directory on Failure
+      - name: Upload full check results on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ runner.os }}-r${{ matrix.config.r }}-check-results
+          path: check
