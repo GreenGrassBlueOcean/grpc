@@ -72,7 +72,7 @@ jobs:
             /usr/local/include/grpc++
             /usr/local/bin/grpc_cpp_plugin
             /usr/local/lib/libabsl_*
-          key: ${{ runner.os }}-grpc-custombuild-v3-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }} # Incremented cache key
+          key: ${{ runner.os }}-grpc-custombuild-v3-${{ env.GRPC_VERSION }}-r${{ matrix.config.r }}
 
       - name: Set PKG_CONFIG_PATH for Linux
         if: runner.os == 'Linux'
@@ -81,15 +81,13 @@ jobs:
           CUSTOM_PC_PATH="/usr/local/lib/pkgconfig:/usr/local/lib64/pkgconfig"
 
           FINAL_PKG_CONFIG_PATH="$SYSTEM_PC_PATH"
-          # Append custom path if it's not already effectively there, ensuring no leading/trailing colons if one is empty
-          if [ -d "$(echo $CUSTOM_PC_PATH | cut -d: -f1)" ]; then # Check if first dir in custom path exists
+          if [ -d "$(echo $CUSTOM_PC_PATH | cut -d: -f1)" ]; then
             if [ -n "$FINAL_PKG_CONFIG_PATH" ] && [[ ":$FINAL_PKG_CONFIG_PATH:" != *":$(echo $CUSTOM_PC_PATH | cut -d: -f1):"* ]]; then
                  FINAL_PKG_CONFIG_PATH="${FINAL_PKG_CONFIG_PATH}:${CUSTOM_PC_PATH}"
             elif [ -z "$FINAL_PKG_CONFIG_PATH" ]; then
                  FINAL_PKG_CONFIG_PATH="$CUSTOM_PC_PATH"
             fi
           fi
-          # Clean up potential leading/trailing colons
           FINAL_PKG_CONFIG_PATH=$(echo "$FINAL_PKG_CONFIG_PATH" | sed 's/^://g' | sed 's/:$//g' | sed 's/::/:/g')
 
           echo "PKG_CONFIG_PATH=${FINAL_PKG_CONFIG_PATH}" >> $GITHUB_ENV
@@ -108,9 +106,6 @@ jobs:
           cd cmake/build
 
           echo "Configuring gRPC with CMake..."
-          # Note: Ensure each -D option is on its own line ending with \ for clarity if preferred,
-          # or ensure they are space-separated correctly if on few lines.
-          # The YAML multiline string `|` preserves newlines, so formatting below is fine.
           cmake ../.. \
             -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_INSTALL_PREFIX=/usr/local \
@@ -122,7 +117,7 @@ jobs:
             -DgRPC_PROTOBUF_PROVIDER=module \
             -DgRPC_SSL_PROVIDER=module \
             -DgRPC_ZLIB_PROVIDER=module \
-            -Dprotobuf_INSTALL=OFF # Attempt to prevent vendored protobuf's .pc install
+            -Dprotobuf_INSTALL=OFF
 
           echo "Building gRPC..."
           make -j$(nproc)
@@ -193,6 +188,7 @@ jobs:
           "$RSCRIPT_EXEC" -e 'options(width = 100); pkgs <- installed.packages()[, "Version"]; sessioninfo::session_info(pkgs, include_base = TRUE)'
 
       - name: Check R package
+        id: r_cmd_check_step # <-- ADDED ID HERE
         uses: r-lib/actions/check-r-package@v2
         env:
           PKG_CONFIG_PATH: ${{ env.PKG_CONFIG_PATH }}
@@ -202,84 +198,94 @@ jobs:
           args: 'c("--no-manual", "--as-cran")'
           timeout: 350m
 
-      # Re-add macOS and Windows steps if they were temporarily removed for debugging Linux
-      # Ensure their specific dependency installation steps are correct.
-
-      # Display Check Logs on Failure (ensure this is complete)
+      # Display Check Logs on Failure
       - name: Show check logs on failure
         if: failure()
         shell: bash
         run: |
           echo "Attempting to display R CMD check logs..."
-          # ... (Your R script for log display) ...
           if [ -z "${{ steps.setup-r-env.outputs.rscript-path }}" ]; then
             echo "WARNING: Rscript path from setup-r step is empty. This is expected if failure occurred before R setup."
             echo "Cannot run R script to display detailed R CMD check logs."
             echo "Check logs from the preceding failing step for the primary error."
-            if [ -d "check" ]; then
-                echo "--- Basic listing of 'check' directory (if it exists) ---"
-                ls -R check
+            # Try to list the check directory directly if it exists, using the output from the check step
+            if [ -n "${{ steps.r_cmd_check_step.outputs.check-dir }}" ] && [ -d "${{ steps.r_cmd_check_step.outputs.check-dir }}" ]; then
+                echo "--- Basic listing of '${{ steps.r_cmd_check_step.outputs.check-dir }}' directory ---"
+                ls -R "${{ steps.r_cmd_check_step.outputs.check-dir }}"
+            elif [ -d "$(ls -td *.Rcheck | head -1)" ]; then # Fallback: newest .Rcheck dir
+                LATEST_RCHECK=$(ls -td *.Rcheck | head -1)
+                echo "--- Basic listing of fallback .Rcheck directory: $LATEST_RCHECK ---"
+                ls -R "$LATEST_RCHECK"
+            else
+                 echo "No .Rcheck directory found by common methods."
             fi
-            exit 0 # Exit cleanly so the next step (upload artifact) can run
+            exit 0
           fi
 
-          # Ensure your R script here is robust
           ${{ steps.setup-r-env.outputs.rscript-path }} - <<EOF
           # --- Start of R script ---
-          get_pkg_name_safe <- function(default_name = "unknown_package_name") {
-            pkg_name <- default_name
-            if (file.exists("DESCRIPTION")) {
-              tryCatch({
-                dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
-                if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
-                    !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
-                  pkg_name <- dcf_content[1,1]
-                } else {
-                  cat("WARNING: DESCRIPTION file found but 'Package' field is missing, empty, or NA.\n")
-                }
-              }, error = function(e) {
-                cat(sprintf("WARNING: Error reading DESCRIPTION file: %s\n", e$message))
-              })
-            } else {
-              cat("WARNING: DESCRIPTION file not found in the current working directory.\n")
-            }
-            return(pkg_name)
+          pkg_check_dir <- Sys.getenv("R_CMD_CHECK_DIR", unset = NA_character_) # Get from env var if set by action
+          if (is.na(pkg_check_dir) && !is.null(steps_check_dir_output <- Sys.getenv("R_CMD_CHECK_STEP_OUTPUT_CHECK_DIR"))) {
+            # Fallback if GITHUB_ENV was used to pass it (less common for this action)
+             if (nzchar(steps_check_dir_output)) pkg_check_dir <- steps_check_dir_output
           }
-          pkg_name_desc <- get_pkg_name_safe()
-          rcheck_dir <- file.path(getwd(), paste0(pkg_name_desc, ".Rcheck")) # Use getwd() for clarity
-          cat(sprintf("Attempting to find logs in expected .Rcheck directory: %s\n\n", rcheck_dir))
+
+          if (is.na(pkg_check_dir) || !nzchar(pkg_check_dir)) {
+            # If check-dir output is not available, try to guess package name and construct path
+            # This part of your R script should correctly determine pkg_name_desc
+            get_pkg_name_safe <- function(default_name = "unknown_package_name") {
+              pkg_name <- default_name
+              if (file.exists("DESCRIPTION")) {
+                tryCatch({
+                  dcf_content <- read.dcf("DESCRIPTION", fields = "Package")
+                  if (nrow(dcf_content) >= 1 && "Package" %in% colnames(dcf_content) &&
+                      !is.na(dcf_content[1,1]) && nzchar(dcf_content[1,1])) {
+                    pkg_name <- dcf_content[1,1]
+                  } else {
+                    cat("WARNING: DESCRIPTION file found but 'Package' field is missing, empty, or NA.\n")
+                  }
+                }, error = function(e) {
+                  cat(sprintf("WARNING: Error reading DESCRIPTION file: %s\n", e$message))
+                })
+              } else {
+                cat("WARNING: DESCRIPTION file not found in the current working directory.\n")
+              }
+              return(pkg_name)
+            }
+            pkg_name_desc <- get_pkg_name_safe()
+            pkg_check_dir <- file.path(getwd(), paste0(pkg_name_desc, ".Rcheck"))
+          }
+
+          cat(sprintf("Attempting to find logs in R CMD check directory: %s\n\n", pkg_check_dir))
 
           log_files_to_show <- c(
-            file.path(rcheck_dir, "00check.log"),
-            file.path(rcheck_dir, "00install.out")
-            # Add more if needed, e.g., specific test logs
+            file.path(pkg_check_dir, "00check.log"),
+            file.path(pkg_check_dir, "00install.out")
           )
 
           all_found <- FALSE
-          for(log_file in log_files_to_show) {
-            if(file.exists(log_file)) {
-              cat(sprintf("\n\n--- Contents of %s ---\n", log_file))
-              # Try to read and print, handle potential errors if file is not readable
-              tryCatch({
-                writeLines(readLines(log_file))
-              }, error = function(e) {
-                cat(sprintf("ERROR reading log file %s: %s\n", log_file, e$message))
-              })
-              all_found <- TRUE
-            } else {
-              cat(sprintf("\n\n--- %s not found ---\n", log_file))
+          if (dir.exists(pkg_check_dir)) {
+            for(log_file in log_files_to_show) {
+              if(file.exists(log_file)) {
+                cat(sprintf("\n\n--- Contents of %s ---\n", log_file))
+                tryCatch({
+                  writeLines(readLines(log_file))
+                }, error = function(e) {
+                  cat(sprintf("ERROR reading log file %s: %s\n", log_file, e$message))
+                })
+                all_found <- TRUE
+              } else {
+                cat(sprintf("\n\n--- %s not found ---\n", log_file))
+              }
             }
-          }
-          if (!all_found) {
-            cat("\nNo standard R CMD check log files found in the expected location.\n")
-            cat("Listing contents of .Rcheck directory if it exists:\n")
-            if (dir.exists(rcheck_dir)) {
-              print(list.files(rcheck_dir, recursive = TRUE, all.files = TRUE))
-            } else {
-              cat(rcheck_dir, "not found.\n")
-              cat("Listing current working directory:\n")
-              print(list.files(getwd()))
+            if (!all_found) {
+               cat("\nNo standard R CMD check log files (00check.log, 00install.out) found in", pkg_check_dir, "\n")
+               cat("Listing all files in .Rcheck directory:\n")
+               print(list.files(pkg_check_dir, recursive = TRUE, all.files = TRUE))
             }
+          } else {
+            cat(pkg_check_dir, "directory not found.\nListing current working directory files:\n")
+            print(list.files(getwd()))
           }
           # --- End of R script ---
           EOF
@@ -290,16 +296,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }}-r${{ matrix.config.r }}-check-results
-          # Path should be relative to GITHUB_WORKSPACE
-          # R CMD check creates a directory named like <pkgname>.Rcheck
-          # This is often created in the parent of the package source directory.
-          # If checkout is to 'grpc', then 'grpc.Rcheck' might be sibling to 'grpc'
-          # or inside it if working-directory for check-r-package is used.
-          # Default for r-lib/actions/check-r-package is it runs in the repo root.
-          # The check directory is usually just <pkgname>.Rcheck if package is in root.
-          # If your package is in a subdirectory, adjust path.
-          # The following assumes your package DESCRIPTION is at the root of the repo.
-          path: ${{ Schritte.R-CMD-check.outputs.check-dir }} # Use output from check action if available
-                                                             # Or, determine package name and construct path
-                                                             # Example: mypackage.Rcheck
-                                                             # If your package name is 'grpc', it would be 'grpc.Rcheck'
+          path: ${{ steps.r_cmd_check_step.outputs.check-dir }} # Corrected path
