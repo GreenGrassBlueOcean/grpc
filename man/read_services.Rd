@@ -2,16 +2,47 @@
 % Please edit documentation in R/parser.R
 \name{read_services}
 \alias{read_services}
-\title{Create stub object from protobuf spec}
+\title{Parse a .proto File to Define gRPC Service Stubs}
 \usage{
 read_services(file)
 }
 \arguments{
-\item{file}{the spec file}
+\item{file}{A character string: the path to the `.proto` file to be parsed.}
 }
 \value{
-a stub data structure (the 'impl' object)
+A named list. Each method's entry contains:
+  \item{RequestType}{An `RProtoBuf::Descriptor` for the request.}
+  \item{ResponseType}{An `RProtoBuf::Descriptor` for the response.}
+  \item{RequestTypeName}{Character string: FQN of request type.}
+  \item{ResponseTypeName}{Character string: FQN of response type.}
+  \item{name}{Character string: full gRPC method path.}
+  \item{f}{Function placeholder.}
+  \item{client_streaming}{Boolean.}
+  \item{server_streaming}{Boolean.}
 }
 \description{
-Create stub object from protobuf spec
+This function reads a `.proto` file, processes its content to identify
+gRPC service definitions, RPC methods, and their associated request and
+response message types. It leverages `RProtoBuf` to load the underlying
+message definitions. The output is a list structure suitable for
+initializing gRPC clients or servers within the `grpc` package.
+}
+\details{
+The function performs two main steps:
+\enumerate{
+  \item It calls `RProtoBuf::readProtoFiles()` to parse the specified `.proto`
+        file. This makes all defined message types globally known to `RProtoBuf`,
+        allowing them to be instantiated using their fully qualified names.
+  \item It then manually parses the `.proto` file content using a token-based
+        approach to identify `package`, `service`, and `rpc` definitions.
+        For each RPC method, it extracts:
+        \itemize{
+          \item The simple method name (e.g., "SayHello").
+          \item The `RequestTypeName` (string) for the request message type.
+          \item The `ResponseTypeName` (string) for the response message type.
+          \item The fully qualified gRPC method `name` (e.g., "/package.Service/Method").
+          \item A placeholder function `f` (initially `identity`).
+          \item `client_streaming` and `server_streaming` boolean flags.
+        }
+}
 }

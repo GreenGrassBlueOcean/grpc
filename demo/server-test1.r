@@ -1,15 +1,15 @@
 # SCRIPT FOR R SESSION 1: SERVER (server-test1.r)
 # Assumes .onLoad in the grpc package now handles loading helloworld.proto
 
-library(grpc) # Not needed if devtools::load_all(".") was run
+#library(grpc) # Not needed if devtools::load_all(".") was run
 library(RProtoBuf)
 library(futile.logger)
 
 # Before loading grpc or running gRPC operations
-rgrpc_set_core_logging(trace_options = c("all"), verbosity = "DEBUG")
+#rgrpc_set_core_logging(trace_options = c("all"), verbosity = "DEBUG")
+rgrpc_set_core_logging(trace_options = NULL, verbosity = NULL)
 
-
-flog.threshold(DEBUG)
+flog.threshold(INFO)
 
 
 

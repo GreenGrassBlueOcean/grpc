@@ -2,26 +2,28 @@
 # Purpose: Tests the revised grpc_client R wrapper against the server.
 
 # 0. Load necessary libraries
-library(RProtoBuf) # Still needed for RProtoBuf::toString and potentially RProtoBuf::P if used directly
+library(RProtoBuf)
 library(futile.logger)
-library(grpc) # Assumed loaded via devtools::load_all(".") or library(grpc) if installed
+#library(grpc) # Use devtools::load_all(".") OR library(grpc) consistently
+
+# EXPLICITLY LOAD PROTO DEFINITIONS IN THIS SESSION
+proto_file_for_client_session <- system.file('examples/helloworld.proto', package = 'grpc')
+if (nzchar(proto_file_for_client_session)) {
+  RProtoBuf::readProtoFiles(proto_file_for_client_session)
+  futile.logger::flog.info("CLIENT_SESSION: Explicitly called RProtoBuf::readProtoFiles on '%s'", proto_file_for_client_session)
+} else {
+  stop("CLIENT_SESSION: Could not find helloworld.proto for explicit loading in client session.")
+}
 
 # Before loading grpc or running gRPC operations
-rgrpc_set_core_logging(trace_options = c("all"), verbosity = "TRACE")
+# rgrpc_set_core_logging(trace_options = c("client"), verbosity = "INFO") # Keep this off for now
 
 flog.threshold(DEBUG)
 
 # 1. Read Service Definitions using read_services
-# This will provide the necessary structure (method names, full paths, Request/Response Descriptors)
-# for grpc_client. It relies on .onLoad or its own call to RProtoBuf::readProtoFiles
-# to make message types known.
 flog.info("CLIENT: Reading service definitions from helloworld.proto using read_services...")
-services_spec_file_client <- system.file('examples/helloworld.proto', package = 'grpc')
-if (!nzchar(services_spec_file_client)) {
-  stop("CLIENT: Could not find helloworld.proto. Check package installation and inst/examples.")
-}
-# The 'services' object from read_services is suitable for grpc_client
-client_service_spec <- read_services(services_spec_file_client)
+# services_spec_file_client is already defined above as proto_file_for_client_session
+client_service_spec <- read_services(proto_file_for_client_session) # read_services will call readProtoFiles again; this is redundant but should be harmless
 flog.info("CLIENT: Service definitions read.")
 
 # (The manual proto descriptor verification block can be removed as read_services
@@ -29,7 +31,7 @@ flog.info("CLIENT: Service definitions read.")
 
 # 2. MANUALLY ENTER THE PORT NUMBER
 # (This part remains manual or could read from server_hook.port if server-test1 wrote it reliably)
-MANUALLY_ENTERED_PORT <- 56843 # !!! --- REPLACE WITH THE ACTUAL PORT FROM YOUR SERVER LOG --- !!!
+MANUALLY_ENTERED_PORT <- 60472 # !!! --- REPLACE WITH THE ACTUAL PORT FROM YOUR SERVER LOG --- !!!
 port_file_for_client <- "server_hook.port" # Match the file name from server-test1.r
 if (file.exists(port_file_for_client)) {
   flog.info("CLIENT: Attempting to read port from '%s'", port_file_for_client)

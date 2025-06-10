@@ -1,132 +1,134 @@
-#' Create stub object from protobuf spec
+#' Parse a .proto File to Define gRPC Service Stubs
 #'
-#' @param file the spec file
-#' @return a stub data structure (the 'impl' object)
-#' @importFrom RProtoBuf readProtoFiles P
+#' This function reads a `.proto` file, processes its content to identify
+#' gRPC service definitions, RPC methods, and their associated request and
+#' response message types. It leverages `RProtoBuf` to load the underlying
+#' message definitions. The output is a list structure suitable for
+#' initializing gRPC clients or servers within the `grpc` package.
+#'
+#' @details
+#' The function performs two main steps:
+#' \enumerate{
+#'   \item It calls `RProtoBuf::readProtoFiles()` to parse the specified `.proto`
+#'         file. This makes all defined message types globally known to `RProtoBuf`,
+#'         allowing them to be instantiated using their fully qualified names.
+#'   \item It then manually parses the `.proto` file content using a token-based
+#'         approach to identify `package`, `service`, and `rpc` definitions.
+#'         For each RPC method, it extracts:
+#'         \itemize{
+#'           \item The simple method name (e.g., "SayHello").
+#'           \item The `RequestTypeName` (string) for the request message type.
+#'           \item The `ResponseTypeName` (string) for the response message type.
+#'           \item The fully qualified gRPC method `name` (e.g., "/package.Service/Method").
+#'           \item A placeholder function `f` (initially `identity`).
+#'           \item `client_streaming` and `server_streaming` boolean flags.
+#'         }
+#' }
+#'
+#' @param file A character string: the path to the `.proto` file to be parsed.
+#' @return A named list. Each method's entry contains:
+#'   \item{RequestType}{An `RProtoBuf::Descriptor` for the request.}
+#'   \item{ResponseType}{An `RProtoBuf::Descriptor` for the response.}
+#'   \item{RequestTypeName}{Character string: FQN of request type.}
+#'   \item{ResponseTypeName}{Character string: FQN of response type.}
+#'   \item{name}{Character string: full gRPC method path.}
+#'   \item{f}{Function placeholder.}
+#'   \item{client_streaming}{Boolean.}
+#'   \item{server_streaming}{Boolean.}
+#' @importFrom RProtoBuf readProtoFiles P name
 #' @importFrom methods is
 #' @export
 read_services <- function(file){
-  SERVICE = "service"
-  RPC = "rpc"
-  RETURNS = "returns" # Keyword used by parser to navigate .proto structure
-  STREAM = "stream"   # Keyword for identifying streaming RPCs
-  PACKAGE = "package"
+  SERVICE = "service"; RPC = "rpc"; RETURNS = "returns"; STREAM = "stream"; PACKAGE = "package"
+  services <- list(); pkg <- ""
 
-  services <- list() # This list will be populated and returned
-  pkg <- ""           # Stores the package name declared in the .proto file (e.g., "helloworld")
+  # Logging helpers (.can_flog, .log_info, etc. assumed to be in R/utils-logging.R)
 
-  # Step 1: Let RProtoBuf process the .proto file.
-  # This is crucial as it loads the message definitions, allowing RProtoBuf::P()
-  # to retrieve Descriptor objects for message types later.
-  RProtoBuf::readProtoFiles(file)
-
-  # Step 2: Read the .proto file content for manual token-based parsing.
-  # This parsing identifies services, RPC methods, and their request/response types.
+  tryCatch({ RProtoBuf::readProtoFiles(file) }, error = function(e) {
+    .log_error("RProtoBuf::readProtoFiles failed for '", file, "': ", e$message)
+    stop(paste0("RProtoBuf::readProtoFiles failed for '", file, "': ", e$message), call. = FALSE)
+  })
+  if (!file.exists(file)) {
+    .log_error("Proto file not found: '", file, "'")
+    stop(paste0("Proto file not found: '", file, "'"), call. = FALSE)
+  }
   lines <- readLines(file)
-  # Tokenize: split by whitespace or around delimiters like {}, (), ;
-  # Also removes single-line comments starting with //
-  tokens <- Filter(f=nchar, unlist(strsplit(lines, '(^//.*$|\\s+|(?=[{}();]))', perl=TRUE)))
+  tokens <- Filter(f=nzchar, unlist(strsplit(lines, '(^//.*$|\\s+|(?=[{}();]))', perl=TRUE)))
 
-  # Nested function to parse an RPC method definition (e.g., rpc SayHello(Request) returns (Reply);)
-  # It's called when an "rpc" token is encountered within a service block.
-  # - i: current index in the `tokens` array.
-  # - service_name: name of the current service being parsed (e.g., "Greeter").
-  doRPC <- function(i, service_name) {
-    rpc_name = tokens[i+1] # Simple name of the RPC method (e.g., "SayHello")
+  doRPC <- function(current_token_idx, service_name_arg) {
+    rpc_name_simple = tokens[current_token_idx + 1]
+    # .log_info("read_services/doRPC: Parsing RPC '%s'", rpc_name_simple) # Less verbose
+    fn <- list(f = I, client_streaming = FALSE, server_streaming = FALSE)
+    i <- current_token_idx + 2
+    # Simplified parsing, assuming valid structure, focusing on essentials
+    if (tokens[i] != '(') stop(paste("Parse error RPC",rpc_name_simple,": expected '(' for req"), call.=F)
+    i <- i + 1
+    if (tokens[i] == STREAM) { fn$client_streaming <- TRUE; i <- i + 1 }
+    req_msg_short_name <- tokens[i]; i <- i + 1
+    if (tokens[i] != ')') stop(paste("Parse error RPC",rpc_name_simple,": expected ')' for req"), call.=F)
+    i <- i + 1
+    if (tokens[i] != RETURNS) stop(paste("Parse error RPC",rpc_name_simple,": expected 'returns'"), call.=F)
+    i <- i + 1
+    if (tokens[i] != '(') stop(paste("Parse error RPC",rpc_name_simple,": expected '(' for resp"), call.=F)
+    i <- i + 1
+    if (tokens[i] == STREAM) { fn$server_streaming <- TRUE; i <- i + 1 }
+    res_msg_short_name <- tokens[i]; i <- i + 1
+    if (tokens[i] != ')') stop(paste("Parse error RPC",rpc_name_simple,": expected ')' for resp"), call.=F)
 
-    # Initialize the list for this RPC method.
-    # 'f = I' sets a placeholder for the R handler function, which the user will define later.
-    fn <- list(f=I)
+    fq_req_name <- if (nzchar(pkg)) sprintf("%s.%s", pkg, req_msg_short_name) else req_msg_short_name
+    fq_res_name <- if (nzchar(pkg)) sprintf("%s.%s", pkg, res_msg_short_name) else res_msg_short_name
 
-    current_param_type_key <- "RequestType" # State variable: expecting "RequestType" first, then "ResponseType"
+    req_desc <- RProtoBuf::P(fq_req_name)
+    if (is.null(req_desc) || !is(req_desc, "Descriptor")) {
+      stop(paste0("Cannot find/validate Descriptor for RequestType '", fq_req_name, "' in RPC '", rpc_name_simple, "'"), call.=F)
+    }
+    fn$RequestType <- req_desc
+    fn$RequestTypeName <- fq_req_name # Store for debugging/future
 
-    # Loop through tokens for this RPC definition: MyRPC ( ReqType ) returns ( RespType ) ;
-    # Stop at the closing '}' of the service block or the ';' ending the RPC definition.
-    while(tokens[i] != '}' && tokens[i] != ';'){
+    res_desc <- RProtoBuf::P(fq_res_name)
+    if (is.null(res_desc) || !is(res_desc, "Descriptor")) {
+      stop(paste0("Cannot find/validate Descriptor for ResponseType '", fq_res_name, "' in RPC '", rpc_name_simple, "'"), call.=F)
+    }
+    fn$ResponseType <- res_desc
+    fn$ResponseTypeName <- fq_res_name # Store for debugging/future
 
-      if(tokens[i] == '('){ # Marks the start of (RequestType) or (ResponseType)
-        i <- i + 1          # Move to the token immediately after '('
+    fn$name <- if (nzchar(pkg)) sprintf("/%s.%s/%s", pkg, service_name_arg, rpc_name_simple) else sprintf("/%s/%s", service_name_arg, rpc_name_simple)
+    services[[rpc_name_simple]] <<- fn
 
-        is_stream <- tokens[i] == STREAM # Check if the 'stream' keyword is present
-        if(is_stream){
-          i <- i + 1      # If 'stream' is present, move past it to the message type name
-        }
-
-        message_type_name_short <- tokens[i] # Short name of the message type (e.g., "HelloRequest")
-
-        # Construct the fully qualified message type name (e.g., "helloworld.HelloRequest").
-        # This uses 'pkg', which is the package name declared at the top of the .proto file.
-        full_message_type_name <- if (nzchar(pkg)) sprintf("%s.%s", pkg, message_type_name_short) else message_type_name_short
-
-        # Retrieve the RProtoBuf::Descriptor object for this message type using RProtoBuf::P().
-        descriptor_object <- RProtoBuf::P(full_message_type_name)
-
-        # Validate that a Descriptor object was successfully retrieved.
-        if (!methods::is(descriptor_object, "Descriptor")) {
-          stop(paste0("Could not find RProtoBuf Descriptor for message type '", full_message_type_name,
-                      "' for RPC '", rpc_name, "' in service '", service_name,
-                      "'. Ensure .proto file ('", file, "') is correct, defines this message, ",
-                      "and RProtoBuf::readProtoFiles() succeeded."))
-        }
-
-        # Store the RProtoBuf::Descriptor object directly into fn$RequestType or fn$ResponseType.
-        # This is the key change to align with the nfultz demo's structure and the
-        # expectations of the GreenGrassBlueOcean/R/server.R and R/client.R files.
-        fn[[current_param_type_key]] <- descriptor_object
-
-        # The 'is_stream' boolean could be stored alongside the descriptor if needed,
-        # e.g., fn[[current_param_type_key]] <- list(descriptor = descriptor_object, stream = is_stream).
-        # However, for direct nfultz demo compatibility and the current server/client R scripts,
-        # storing the descriptor directly is sufficient.
-
-        # If RequestType was just processed, the next type will be ResponseType.
-        if (current_param_type_key == "RequestType") {
-          current_param_type_key <- "ResponseType"
-        }
+    current_token_after_response_paren <- i + 1
+    if (current_token_after_response_paren <= length(tokens) && tokens[current_token_after_response_paren] == "{") {
+      i <- current_token_after_response_paren + 1; open_braces <- 1
+      while(i <= length(tokens) && open_braces > 0) {
+        if (tokens[i] == "{") open_braces <- open_braces + 1
+        else if (tokens[i] == "}") open_braces <- open_braces - 1
+        i <- i + 1
       }
-      i <- i + 1 # Move to the next token in the RPC definition
-    }
-
-    # Construct and store the fully qualified gRPC method path (e.g., "/helloworld.Greeter/SayHello")
-    fn$name <- if (nzchar(pkg)) sprintf("/%s.%s/%s", pkg, service_name, rpc_name) else sprintf("/%s/%s", service_name, rpc_name)
-
-    # Add this method's definition ('fn') to the main 'services' list.
-    # It's keyed by the simple RPC name (e.g., services$SayHello <- fn_definition_for_SayHello).
-    services[[rpc_name]] <<- fn
-    return(i) # Return the current token index (advanced past the RPC definition)
+    } else { i <- current_token_after_response_paren }
+    if (i <= length(tokens) && (tokens[i] == ';' || tokens[i] == '}')) return(i)
+    else if (i > length(tokens)) return(i)
+    else { .log_warn("read_services/doRPC: Unexpected token '%s' after RPC '%s'", tokens[i], rpc_name_simple); return(i) }
   }
 
-  # Nested function to parse a service definition block (e.g., service Greeter { ... }).
-  # It's called when a "service" token is encountered in the .proto file.
-  # - i: current index in the `tokens` array.
-  doServices <- function(i){
-    service_name <- tokens[i+1] # The token after "service" is its name (e.g., "Greeter").
-
-    # Loop through tokens within the service block until the closing '}' is found.
-    while(tokens[i] != '}') {
-      if(tokens[i] == RPC){ # If an "rpc" token is found, call doRPC to parse the method.
-        i <- doRPC(i, service_name) # doRPC will advance 'i' past the RPC definition.
-      }
-      i <- i + 1 # Move to the next token within the service block.
+  doServices <- function(current_token_idx){
+    service_name_val <- tokens[current_token_idx + 1]
+    i <- current_token_idx + 2
+    if(i > length(tokens) || tokens[i] != '{') stop(paste("Parse error Service",service_name_val,": expected '{'"), call.=F)
+    i <- i + 1
+    while(i <= length(tokens) && tokens[i] != '}') {
+      if(tokens[i] == RPC){ i <- doRPC(i, service_name_val)
+      if (i <= length(tokens) && tokens[i] == ';') i <- i + 1
+      } else { i <- i + 1 }
     }
-    return(i) # Return the token index (should be at or after the service block's '}').
+    return(i)
   }
-
-  # Step 3: Main parsing loop. Iterate through all tokens from the .proto file.
-  i <- 1
-  while(i <= length(tokens)){
-    if(tokens[i] == PACKAGE) {
-      # Found the 'package' directive. The next token is the package name.
-      pkg <- tokens[i+1];
-      i <- i + 1 # Also consume the package name token, so advance main loop index.
-    }
-    else if(tokens[i] == SERVICE){
-      # Found the 'service' directive. Call doServices to handle the entire service block.
-      # doServices will advance 'i' past the end of the service block.
-      i <- doServices(i)
-    }
-    i <- i + 1 # Advance to the next token for the main loop.
+  idx <- 1
+  while(idx <= length(tokens)){
+    if(tokens[idx] == PACKAGE) {
+      if ((idx + 1) <= length(tokens)) { pkg <- tokens[idx+1]; idx <- idx + 2
+      } else stop("Parse error: 'package' keyword without name.", call.=F)
+    } else if(tokens[idx] == SERVICE){ idx <- doServices(idx)
+    if(idx <= length(tokens) && tokens[idx] == '}') idx <- idx + 1
+    } else { idx <- idx + 1 }
   }
-
-  return(services) # Return the populated list of service method definitions.
+  return(services)
 }

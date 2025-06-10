@@ -134,3 +134,50 @@ rgrpc_set_core_logging <- function(trace_options = NULL, verbosity = NULL, quiet
     GRPC_VERBOSITY = if (is.na(old_verbosity_val)) NULL else old_verbosity_val
   ))
 }
+
+
+
+
+# Internal helper to check if futile.logger functions are available
+# Not exported.
+.can_flog <- function(level_func_name) {
+  if (!requireNamespace("futile.logger", quietly = TRUE)) return(FALSE)
+  tryCatch({
+    func <- getFromNamespace(level_func_name, "futile.logger")
+    is.function(func)
+  }, error = function(e) FALSE)
+}
+
+# Internal logging wrapper functions
+# Not exported.
+.log_info <- function(...) {
+  if (.can_flog("flog.info")) { # Note the dot prefix for internal call
+    futile.logger::flog.info(...)
+  } else {
+    message(paste0("INFO: ", ...)) # Optional fallback
+  }
+}
+
+.log_error <- function(...) {
+  if (.can_flog("flog.error")) { # Note the dot prefix
+    futile.logger::flog.error(...)
+  } else {
+    warning(paste0("ERROR: ", ...), call. = FALSE) # Optional fallback
+  }
+}
+
+.log_warn <- function(...) {
+  if (.can_flog("flog.warn")) { # Note the dot prefix
+    futile.logger::flog.warn(...)
+  } else {
+    warning(paste0("WARN: ", ...), call. = FALSE) # Optional fallback
+  }
+}
+
+.log_fatal <- function(...) {
+  if (.can_flog("flog.fatal")) { # Note the dot prefix
+    futile.logger::flog.fatal(...)
+  } else {
+    stop(paste0("FATAL: ", ...), call. = FALSE) # Optional fallback
+  }
+}

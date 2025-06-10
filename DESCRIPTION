@@ -15,14 +15,17 @@ Imports:
     Rcpp (>= 0.12.5),
     RProtoBuf,
     futile.logger,
-    methods
+    methods,
+    callr
 Suggests:
-    testthat,
     processx,
     jsonlite,
-    rpart
+    rpart,
+    mockery,
+    testthat (>= 3.0.0)
 LinkingTo: Rcpp
 SystemRequirements: 
     grpc (>= 4.0.0)
     protobuf
 RoxygenNote: 7.3.2
+Config/testthat/edition: 3
